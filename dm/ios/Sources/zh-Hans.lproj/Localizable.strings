@@ -131,3 +131,5 @@
 "Traditional Chinese" = "繁体中文";
 "Simplified Chinese" = "简体中文";
 "Brazilian Portuguese" = "巴西葡萄牙语";
+"Experimental frame generation" = "实验性补帧";
+"Docked rendering only. MetalFX inserts one picture between 30 real game frames per second. Adds GPU work and display latency; requires a supported GPU. Applies on Play." = "仅支持底座渲染模式。游戏每秒渲染 30 帧，MetalFX 在相邻画面之间补一帧。会增加 GPU 开销和显示延迟，需要支持的 GPU。点击“开始游戏”时生效。";

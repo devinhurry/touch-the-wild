@@ -1,4 +1,4 @@
-"""Offer the resolution control only when the rewritten build supports it."""
+"""Player settings expose only a profile's optional supported features."""
 from pathlib import Path
 import sys,tempfile,unittest
 from unittest.mock import patch
@@ -19,5 +19,24 @@ class ResolutionSetting(unittest.TestCase):
                 fps=next(s for s in rows if s['env']=='DM_FPS_TARGET')
                 self.assertEqual(fps['default'],'60')
                 self.assertEqual(fps['options'],[['30','30 fps'],['60','60 fps']])
+
+    def test_frame_generation_switch_requires_profile_inputs(self):
+        with tempfile.TemporaryDirectory() as tmp,patch.object(settings.nacp,'languages',return_value=['en-US']):
+            for gid, offered in [('01007EF00011E000',True),('010015100B514000',False),('010056B015FE8000',False)]:
+                rows=settings.build(gid,tmp,'unused')['settings']
+                fg=[s for s in rows if s['env']=='DM_FRAMEGEN']
+                self.assertEqual(bool(fg),offered)
+                if fg:
+                    self.assertEqual(fg[0]['default'],'0')
+                    self.assertEqual(fg[0]['needs'],'DM_OPMODE=1')
+                    self.assertEqual((fg[0]['kind'],fg[0]['on'],fg[0]['off'],fg[0]['level']),('toggle','30','0','basic'))
+
+            # Listing follows the supplied capability, not a fixed title ID.
+            header=settings.game.header(settings.game.load('010015100B514000'))
+            header=header.replace('#define DM_GAME_FRAMEGEN_SCENE ""','#define DM_GAME_FRAMEGEN_SCENE "bd7ffdd435c6c3bc"')
+            header=header.replace('#define DM_GAME_FRAMEGEN_CAMERA ""','#define DM_GAME_FRAMEGEN_CAMERA "0:2336"')
+            with patch.object(settings.game,'header',return_value=header):
+                rows=settings.build('010015100B514000',tmp,'unused')['settings']
+                self.assertIn('DM_FRAMEGEN',[s['env'] for s in rows])
 
 if __name__=='__main__':unittest.main()

@@ -159,6 +159,17 @@ t_present_rescue: t_present_rescue.m t_present_rescue_focus.c $(MTL_T_DEP)
 .PHONY: check_t_present_rescue
 check_t_present_rescue: t_present_rescue
 	MTL_DEBUG_LAYER=1 ./t_present_rescue --metal
+t_framegen: t_framegen.m $(MTL_T_DEP)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_framegen.m $(MTL_T_SRC) $(FW)
+.PHONY: check_t_framegen
+check_t_framegen: t_framegen
+	MTL_DEBUG_LAYER=0 ./t_framegen --unsupported
+	MTL_DEBUG_LAYER=0 ./t_framegen
+t_framegen_motion: t_framegen_motion.m t_framegen.m $(MTL_T_DEP)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_framegen_motion.m $(filter-out ../nvn/framegen_metal.m,$(MTL_T_SRC)) $(FW)
+.PHONY: check_t_framegen_motion
+check_t_framegen_motion: t_framegen_motion
+	MTL_DEBUG_LAYER=0 ./t_framegen_motion
 t_present_alloc: t_present_alloc.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_present_alloc.m $(MTL_T_SRC) $(FW)
 .PHONY: check_t_present_alloc

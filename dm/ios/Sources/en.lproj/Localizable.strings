@@ -131,3 +131,5 @@
 "Traditional Chinese" = "Traditional Chinese";
 "Simplified Chinese" = "Simplified Chinese";
 "Brazilian Portuguese" = "Brazilian Portuguese";
+"Experimental frame generation" = "Experimental frame generation";
+"Docked rendering only. MetalFX inserts one picture between 30 real game frames per second. Adds GPU work and display latency; requires a supported GPU. Applies on Play." = "Docked rendering only. MetalFX inserts one picture between 30 real game frames per second. Adds GPU work and display latency; requires a supported GPU. Applies on Play.";
