@@ -528,6 +528,20 @@ used by Camera and Scope. The left-stick ownership check uses the same button
 hit eligibility, and the Mac preview shares the fix. Other games retain their
 existing cluster behavior; button sizes and sliding behavior are unchanged.
 
+**Resolved: landscape movement gap between L and the equipment cross (2026-10-31).**
+Movement touch-down only considered the stick's home grab circle; the existing
+lower-left area predicate was unused. Blank points between L and the D-pad fell
+through as game touchscreen input, so dragging them produced no movement axes.
+UIKit and the Mac preview now let unclaimed space in the lower-left third of
+the control area start the floating movement stick. Buttons, the D-pad, the
+shield grab region, map taps and native camera/scope targets retain ownership;
+an already held movement stick cannot be replaced by another finger.
+The UIKit regression covers four points in the gap, drag/release axes and L/D-pad
+priority. All new checks pass; the full harness retains three pre-existing
+portrait-layout assertion failures. The BOTW-only full game regression stops
+before translation because the pinned x86_64 translator cannot load the local
+arm64 .NET runtime; no game boot was tested. Physical iPhone acceptance remains pending.
+
 R3 Scope owns a guide bar inside `MainScreen_00`, under
 `Pa_CameraPointer_00`, rather than an independent menu screen. Its visible
 capture-backed guide plates and native glyphs supply Place pin, Quit and Edit
@@ -585,6 +599,76 @@ Used at `DM_FPS_TARGET=0` and for the interval the framework keeps while the VFR
 - `PlacementMgr` and `RadarMgr` yield once per item of their batches (the back-off stretched a 94,263-item radar batch to about 30 s). A yield whose caller's x19–x28 moved now returns at once: outdoors on the Mac, CPU energy went from 0.35–0.74 to 0.21–0.34 W at 60 fps, CPU from 76–83% to 96–106% of a core, and the frame interval's p99 from 19 to 20–21 ms. A `sched_yield` on each of their 200,000 yields a second cost a third of a core more than the back-off had.
 - **Address → memory pool lookups**: the game keeps about 1,760 memory pools alive, and `mtl_addr` / `mtl_gpu_addr` scanned them all for every buffer binding of every draw (about 1,000 samples of a submit-thread profile). Last hit, then a binary search (`pool_find`): host submit time in the shrine 21 → 7 ms a frame (p50), the median frame 38 → 21 ms.
 - Upload staging blocks are reused: the game used to allocate, make resident and free a 32 MB block for each re-upload of a small CPU-written texture, about 3 GB/s.
+
+### Experimental resolution and scene upscaling
+
+Both options default off. `DM_DYNAMIC_RESOLUTION=1` retargets the verified
+1.9.0 native controller to the effective frame-rate cap. Its original GPU-time
+normalization at `main+0x12670ac` becomes 200 at 60 fps, 100 at 30 fps, through
+state `+0x38`; zero keeps the original instruction. This preserves the native
+averaging, 0.05 steps and 0.8 floor. The 175/150 thresholds then correspond to
+14.58/12.5 ms at 60 fps, and retain their original 29.17/25 ms at 30 fps.
+Movies and the thermal cap publish the same effective 30 fps budget. A fixed
+`DM_RENDER_SCALE` takes precedence; target 0 retains the original budget.
+
+`DM_PRESENT_UPSCALE=scene` uses [scene upscaling before the HUD](../../../docs/reference/rendering.md#scene-upscaling-before-the-hud).
+An outdoor pass trace confirms vertex `5e9f57168d89a543` and fragment
+`bd7ffdd435c6c3bc` are the native scene FXAA/upscale from the tone-mapped
+1600x900 image into the 1920x1080 UI canvas, before its layout draws. Their
+vertex constants already describe the output texel grid, including when the
+native controller lowers the input to 1280x720. Only that draw's input is
+substituted; the native FXAA, output alpha/channel mask, and all later HUD,
+inventory and map draws retain their original state. The single **Upscaling**
+choice offers **Standard**, **Scene MetalFX** and
+**Full-screen MetalFX** (`DM_PRESENT_UPSCALE=off|scene|metalfx`); the MetalFX
+modes cannot run together. MetalFX adds GPU work; neither
+option is a measured frame-rate improvement on every scene or device.
+
+Initial validation (`39585d4e`, 2026-10-31, Apple M2): 64 Python checks, the emitted ARM64 budget
+stub, 31 scene-scaling GPU checks in each encoding mode, 168 existing present
+checks, the present snapshot cases, and 188 iOS source files pass. World,
+inventory, map, and return-to-world camera/movement checks retain their HUD.
+The BOTW-only `regress.py check --quick` comparison against `3ae8e2b9` is
+`PASS`: 19,592/19,592 shaders in both, identical MSL and no new red lines.
+Both builds miss the reference machine's 2,500 frames by 60 s gate on this
+M2 (baseline 1,744, candidate 1,770 by the end of the 70 s runs); screenshots
+confirm both reach the outdoor scene. Other games are not runtime-checked:
+only this verified controller and scene pair opt in, and the shared present
+path has the focused GPU coverage above.
+
+The unified selector (2026-10-31) removes the independent scene toggle.
+Settings generation and the shared iOS/Mac storage check cover one choice,
+all three values, applying to the game environment, and reopening saved choices.
+Scene GPU tests pass 36 checks in each encoding mode, including refusal in
+Standard and Full-screen modes; the 171 present checks confirm Scene mode
+keeps final presentation on its standard path. Both localization tables
+validate, and all 188 iOS source files compile. The BOTW-only quick regression against
+`39585d4e` is `PASS`, with identical 19,592-shader outputs and no new red
+lines; both runs still miss the reference-machine frame gate (1,834 and
+1,844 at 70 s). Other games retain their existing Standard / Full-screen
+choices; scene mode requires the verified profile pair.
+
+Exploratory `scripts/bench.py` comparison, using its existing runner with the
+copied post-pickup outdoor save, 60 fps target, the same host and warm pipeline
+archive: two 20 s windows per variant, at 60–80 s after launch. No red lines;
+the source save's digest is unchanged. Medians over the two runs:
+
+| Variant | fps | GPU p50 (ms) |
+|---|---:|---:|
+| Original budget and scaling | 21.40 | 25.72 |
+| Retargeted native budget | 21.25 | 26.15 |
+| Retargeted budget + scene MetalFX | 21.25 | 27.26 |
+
+Other tasks compiled on the same Mac during these runs, so these are not
+isolated performance acceptance numbers. They show no frame-rate improvement
+in this scene. The native controller's 0.8 floor is unchanged; MetalFX has its
+own cost. The two options stay opt-in pending idle-machine and device testing.
+
+Artifacts, including native disassembly, GPU tests and game traces, are in
+`dynres-scene-experiment-20261031/` in the game's NSP work folder. Local shader
+libraries use chain `715bb867230c` and the explicitly experimental Metal
+`32023.883`, rather than the pinned `32023.921`. Physical iPhone acceptance
+remains pending.
 
 ## GPU work
 
@@ -677,6 +761,141 @@ Validation: aspect/background restoration and menu/HUD regressions pass; 173 NVN
 - Windowed on the Mac with `present_now`'s residency commit: its title, 60 fps, no GPU error.
 
 **Gameplay edge HUD and loading fills (2026-10-29, resolved on Mac).** The native heart container moves toward the left display edge, preserving the spacing of full and partial hearts. The collapsed minimap and its sensor, noise, temperature, time and weather panes move together toward the right edge. Touch mode retains its upper-right map layout; ordinary input retains the lower-right layout. Hearts retain native padding against the full display; the map cluster uses its authored right-corner padding independently of input mode. Touch map bounds and the adjacent plus/minus buttons use the same HUD rectangle. Expanding the Slate restores its native centered position; returning to 16:9 restores all original positions without accumulating offsets. The HUD draw scope fixes [target-clamped scissors](../../../docs/reference/rendering.md#edge-anchored-ui-keeps-open-scissor-edges) without opening menu clips.
+
+**Narrow displays and optional portrait controls (2026-10-31).** Below 16:9,
+hearts and the collapsed minimap/environment group use the top corners, in
+both touch and controller modes. Their readable size follows the display's
+shorter edge. Native pane transforms keep artwork, scissors, map capture and
+touch bounds together; opening the Slate restores the original menu geometry.
+The loading screen's cream and black fills extend vertically. Other menu
+foregrounds retain their centered 16:9 proportions. Returning to 16:9 or wider
+restores the existing HUD transforms.
+
+The current-rune Picture has a separate capture draw tag, which takes priority
+over its equipment group's HUD tag. On narrow displays it must share that
+group's native transform: applying the centered-menu viewport correction again
+flattened the rune and moved it away from the D-pad. The rune capture tag now
+uses the same narrow HUD viewport, while wider displays retain their correction.
+
+The weather component's animated current-weather pictures do not inherit model
+scale in the same way as its flat forecast icons and background. Applying the
+narrow HUD's nonuniform scale to `Pa_Weather_00` stretched the current rain into
+a tall streak; even a uniform parent scale left the animated icon too small.
+The component now retains its native model geometry. Its draw scope applies
+both display-axis corrections to a replay-time projection copy, after the
+animation, before clipping. Its relocation delta uses those same scales, keeping
+the weather aligned with the other environment gauges. Guest uniforms and shader
+libraries are unchanged; 16:9 and wider retain their existing behavior.
+Mac gameplay verifies the rain, sun and cloud pictures in portrait and 4:3;
+native aspect/HUD fixtures, 189 NVN recording checks, 192 graphics checks and
+188 iOS source checks pass. Evidence is in `portrait-live-20261031/` and
+`weather-*-20261031.log` in the game work folder. Physical iPhone acceptance
+remains pending; the full shader regression has the compiler-version limitation
+described below.
+
+The BOTW touch editor's **Enable portrait mode** switch (`DM_BOTW_PORTRAIT`,
+off by default) permits upright iOS gameplay. The compact touch profile is used
+only when the display is taller than it is wide and its width after left/right
+safe insets is below 600pt. At 600pt or wider, portrait uses the normal profile;
+landscape always retains the normal profile. Compact L sits at the bottom-left
+safe-area corner with 10pt left/bottom margins; the D-pad sits to its right at
+the same center height, with a 15pt gap between their edges.
+In compact mode, the D-pad's grab region takes touch-down priority over the
+floating movement stick on both iOS and the Mac preview.
+L and the D-pad have default diameters
+6pt smaller than their original compact sizes. The movement stick is shifted
+another 40pt up; ZL is raised 20pt. The right buttons are 200pt below their previous homes,
+with Y/X lowered another 15pt and ZR/R raised 5pt: ZR takes the former R horizontal position and R sits
+directly above it, with the standard shoulder gap. All six right buttons are
+shifted another 3pt right. Y/X occupy the next row and B/A the bottom row; Y and
+B have an additional 10pt right shift. Y's default diameter is 10pt larger than X; A and B are
+10pt smaller than X. Each compact face button has its own position
+and size in the touch editor (`DM_BOTW_PORTRAIT_PAD_A_*`, `_B_*`, `_X_*`, `_Y_*`).
+The removed compact `FACE_*` group settings are not migrated; adjust individual
+buttons in the editor instead. Normal and compact previews each edit, reset
+and export their own layout and movement response;
+compact keys retain the `DM_BOTW_PORTRAIT_PAD_` and `DM_BOTW_PORTRAIT_MOVE_`
+prefixes. The frontend publishes the selected profile's native D-pad size with
+its position, so the equipment artwork stays consistent in wide portrait too.
+Resizing releases held touch input before switching
+profiles. The launcher remains landscape, physical controllers retain their
+input behavior, and other games do not offer these settings or orientations.
+
+Validation: native geometry covers 320x568, 390x844, 430x932 and 768x1024;
+aspect tests cover readable 4:3/9:16 HUD geometry and restoration; the UIKit
+handler harness passes 39 look sessions, including portrait face hits,
+camera/button multitouch, rotation release, gyro basis and controller hiding.
+The 600pt update adds 599/600/626/744pt selection, horizontal safe-inset and
+native D-pad scale checks; these pass in the native and UIKit harnesses.
+Mac gameplay also verifies a 390pt compact portrait window widening to 626pt
+with normal controls, then shrinking back; the rune and D-pad remain aligned.
+Independent setting persistence/reset/export, the full host suite, 184 GPU
+present checks, 188 iOS source checks and an unsigned iOS smoke build pass.
+The BOTW-only shader regression stops at the local compiler check:
+Metal `32023.883` differs from the pinned `32023.921`. This is separate from
+the live Mac test, which reuses the prepared `715bb867230c` shader cache with
+the current host. Mac gameplay verifies the readable portrait/4:3 top HUD,
+minimap tap, native Back, loading fill and a portrait/landscape/portrait
+round trip. The test runs from a copy of the user's save. Evidence is in `portrait-*-20261031/` and
+`portrait-live-20261031/` in the game work folder. Physical iPhone rotation
+and safe-area acceptance remain pending.
+
+**iPhone Duo window and Seated layout (2026-10-31).** Following
+[Apple's Duo guidance](https://developer.apple.com/documentation/technologyoverviews/preparing-your-app-for-iphone-duo),
+the iOS surface reads UIKit's active `divisionRegionKind` reserved regions during `updateConstraints`,
+so a fold change is observed even when the window bounds stay unchanged. A
+horizontal division puts the game picture and native menus above the fold;
+the lower pane contains the touch pad and, while the native map is visible,
+the minimap/environment cluster at its top with an 8pt margin. The touch pad
+remains available in menus in Seated mode; direct menu touch stays in the upper
+pane. Connected controllers still hide the virtual pad. Vertical/book folds
+retain the existing whole-window layout. Fixed picture aspects fit inside the
+upper pane without letterboxing or shrinking the lower controls.
+
+The game composites its scene opaquely into its UI canvas and caches menu and
+3D-character pictures there. Keep those game-owned targets in native coordinates:
+scaling them internally causes repeated cropping and duplicate character pictures.
+Only the final canvas-to-swapchain copy and later swapchain draws fit the upper
+picture region. Existing native map, weather, gauge and touch-equipment draw scopes
+instead draw to a transparent host target, composited into the lower pane before
+the ordinary snapshot/present path. The map's native framebuffer blur reads that
+same target. Adjacent dock draws share a render pass; native target changes,
+clears and other draws close it. Shader libraries and the translation chain
+are unchanged. Hearts remain with the upper picture; controller equipment keeps
+its original layout.
+
+Window-size, safe-inset, orientation and fold changes release virtual input before
+relayout, without clearing a physical controller. Cancelled menu fingers retain
+ownership until lift, preventing a resize from becoming a new tap or pinch.
+Display scale comes from the current view traits; Metal drawables, text and icon
+layers refresh after display changes. Compact/normal selection follows the usable
+control pane's geometry and the existing 600pt boundary, independently of the
+portrait rotation-permission switch. The touch editor stacks its preview and
+settings in narrow windows. Core Motion's view-relative samples retain their
+single conversion to Switch axes, with a fixture covering all four orientations.
+
+Validation: native geometry/aspect/HUD fixtures, 191 NVN recording checks,
+201 real-Metal graphics checks, 188 iOS source checks and the SwiftUI/settings
+storage check pass. The UIKit harness passes 40 look sessions, including fold
+input cancellation, persistent lower menu buttons, upper menu pointers and
+controller isolation. The current Mac host with prepared `715bb867230c` shaders
+verifies gameplay, top-of-lower-pane minimap hits, inventory categories, the
+complete inventory character/background, native Back, lower A/B, and
+Seated/whole-window/Seated restoration. Tests use a copied save; evidence and
+the regression report are in `duo-adaptation-20261031/` in the game work folder.
+The BOTW-only `regress.py check --quick` is **ERROR**, blocked before shader
+comparison by Metal `32023.883` versus pinned `32023.921`; other games are not
+runtime-checked because this region/draw routing is BOTW-only. Local SDK 26.5
+checks exclude the new 27.1 APIs; a separate syntax check with Apple's declarations
+is not an SDK build. Building with iOS 27.1 and physical Duo display/fold/gyro
+acceptance remain pending on the user's other machine. The reserved-region path
+uses both SDK and runtime availability guards; older systems keep existing behavior.
+
+Integration with main `a97cb376`: 190 iOS source files and the aspect/HUD
+fixtures pass. The geometry fixture's original portrait minimum-spacing assertion
+fails identically on that main revision and the merge after main's compact-spacing
+change; this integration preserves the new positions rather than changing that
+unrelated layout. No GPU tests were repeated during the exclusive measurement pause.
 
 **Resolved: minimap disappeared in very wide windows (2026-10-29).**
 The D-pad center is published relative to the centered 16:9 UI canvas. At 32:9,
@@ -947,11 +1166,18 @@ Before publishing, the fixes were integrated with main's pipeline archive and GP
 
 ## Found on this game
 
+- **Implemented; physical iPhone acceptance pending:** [Separate game images include installed DLC](../../../docs/reference/packing.md#separate-game-images-include-installed-dlc). `--romfs separate` now keeps both installed DLCs in the same directly readable image as the base/update, outside the IPA and Xcode app. Unchanged data reuses that image.
+  Existing `Documents/game-data` imports remain usable without an image. Missing data opens an import/check screen before the launcher; see the same packing entry for directory selection and failure-preserving import behavior.
+  The real combined image is 16,521,938,617 bytes. A headless current-source `scripts/run_mac.py --test` run with a save copy mounted the base and DLC 1 from that image, reported owned indices `{1,2}`, and passed frame 3,300 without a `[RED]` line or crash. Evidence is in `combined-image-20261031/` in the game's work folder. The independent chain-regression command was blocked by the existing local Metal compiler/lock mismatch before shader comparison; this is not an iPhone delivery check.
 - **Experimental: separate generated pictures from real-frame ownership:** [MetalFX interpolation and real-frame ownership](../../../docs/reference/frame-rate.md#experimental-metalfx-interpolation-keeps-real-frame-ownership).
 
 - **Experimental, switch-controlled:** [File-backed guest heap](../../../docs/reference/memory.md#experimental-file-backed-guest-heap), on `experiment/file-backed-memory`. The launcher defaults the preset from available memory; a saved manual On/Off takes priority. Mac probes check actual page residency separately from memory-limit accounting, including real GPU reads/writes. The experiment note records the retained-graphics game comparison and the current-graphics/iPhone validation boundary.
 
 - **Resolved in code and Mac gameplay, iPhone acceptance pending:** [Ordinary virtual sticks while relative look is enabled](../../../docs/reference/services.md#ordinary-virtual-sticks-while-relative-look-is-enabled). The pickup/backup-pad reproduction and runtime evidence are recorded above.
+
+- **Resolved in code:** [Mac test shader preparation looks stalled without progress](../../../docs/reference/packing.md#mac-test-shader-preparation-looks-stalled-without-progress). The launcher's missing progress setup hid the cache and translation work behind a static `[2/0]` stage line.
+
+- **Resolved in code, translator startup and sample shader build checked:** [Runtime discovery for standalone .NET tools](../../../docs/reference/packing.md#homebrew-net-is-on-path-but-apphosts-cannot-find-the-runtime). Mac test shader preparation now initializes the runtime and checks the translator before splitting. The private external SDK remains outside the repository; a complete shader rebuild and gameplay were not part of this environment check.
 
 - **Resolved in code, iPhone acceptance pending:** [Guest calls made by observation callbacks](../../../docs/reference/threads.md#guest-calls-made-by-observation-callbacks). The iPhone inventory-category crash log from build `895cecbc` matches the current gate-stack CPU reproduction. It now passes with the same native category entry points retained. Before/after logs and the supplied iPhone log are in `inventory-category-crash-20261030/` in the game's work folder.
 
@@ -983,6 +1209,7 @@ General host changes first needed here; each applies to every game:
 - **Resolved: no rumble on Xbox and DualShock 4-style controllers (Mac)** (`haptics_apple.m`): [Controller haptic engines without advanced players](../../../docs/reference/services.md#controller-haptic-engines-without-advanced-players), [DualShock 4 rumble through its effects report](../../../docs/reference/services.md#dualshock-4-rumble-through-its-effects-report). The charged attack's 0.07 is still not felt on an Xbox controller's motors (open there).
 - **No sound on an iPhone set to silent** (`front_ios_audio_session`): [The ring / silent switch muted the game on iOS](../../../docs/reference/audio.md#the-ring--silent-switch-muted-the-game-on-ios); the device check is open.
 - **Upscaling in the present** (`fx_encode`, `DM_PRESENT_UPSCALE`): [The present upscales through MetalFX](../../../docs/reference/rendering.md#the-present-upscales-through-metalfx).
+- **Experimental scene scaling before UI** (`DM_PRESENT_UPSCALE=scene`, default off): [Scene upscaling before the HUD](../../../docs/reference/rendering.md#scene-upscaling-before-the-hud).
 - **Thermal cap; resolved movie recovery and acquire/present races** (`thermal_capped`, `DM_THERMAL_CAP`): [A thermally serious iPhone holds 30 fps](../../../docs/reference/frame-rate.md#a-thermally-serious-iphone-holds-30-fps).
 - **Resolved in the host: frame-step recovery after a 30 fps cap**: [The frame step after a 30 fps cap ends](../../../docs/reference/frame-rate.md#the-frame-step-after-a-30-fps-cap-ends). Modelled with the measured iPhone GPU times; recovery on the device has not been observed here.
 - **Pipeline keys omit disabled blend factors** (`pso_key_norm`): [Pipeline keys omit unused colour state](../../../docs/reference/shaders.md#pipeline-keys-omit-unused-colour-state).

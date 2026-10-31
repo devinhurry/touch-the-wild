@@ -7,7 +7,6 @@
 #include "botw_touch_actions.h"
 #include "botw_touch_menu.h"
 #include "touchpad_geometry.h"
-#include "botw_touch_layout.h"
 #include <math.h>
 #include <stdatomic.h>
 #include <TargetConditionals.h>
@@ -19,7 +18,7 @@ static const char BOTW_BUILD[] = "cd57b23fa4bbad65803d9788c01821ee";
 static pthread_mutex_t g_touchhud_mu = PTHREAD_MUTEX_INITIALIZER;
 static struct {
     int active, home_valid, delta_valid, map_rect_valid;
-    float x, y, home_x, home_y, map_dx, map_dy, map_rect[4];
+    float x, y, dpad_scale, home_x, home_y, map_dx, map_dy, map_rect[4];
     int rune_valid;
     uint64_t rune_token;
     uintptr_t rune_pane, rune_chain[10];
@@ -31,7 +30,6 @@ static _Atomic int g_touchhud_available;
 static _Atomic int g_touchhud_map_collapsed;
 static _Atomic(uintptr_t) g_touchhud_map_root;
 static module_t *g_touchhud_main;
-static dm_botw_touch_layout g_touch_layout;
 static _Thread_local int g_rune_drawing;
 static uint8_t *pane_parent(uint8_t *pane);
 static int visible_to_root(uint8_t *pane);
@@ -45,17 +43,18 @@ int dm_botw_touch_hud_active(void) {
     return atomic_load_explicit(&g_touchhud_active, memory_order_acquire);
 }
 
-void dm_botw_touch_hud_publish(int active, float center_x, float center_y) {
+void dm_botw_touch_hud_publish(int active, float center_x, float center_y, float dpad_scale) {
     if (!strcmp(DM_GAME_ID, "01007EF00011E000")) {
-        if (!isfinite(center_x) || !isfinite(center_y)) active = 0;
-        // Coordinates use the centered 16:9 canvas, not the whole display.
-        // Edge controls can legitimately lie outside [0,1] on wider screens.
+        if (!isfinite(center_x) || !isfinite(center_y) || !isfinite(dpad_scale) || dpad_scale<=0) active = 0;
+        // Wide screens use the centered 16:9 canvas; narrow HUD uses the full
+        // picture. Edge controls can legitimately lie outside [0,1].
         int became_inactive;
         pthread_mutex_lock(&g_touchhud_mu);
         became_inactive = g_touchhud.active && !active;
         g_touchhud.active = !!active;
         g_touchhud.x = center_x;
         g_touchhud.y = center_y;
+        g_touchhud.dpad_scale = dpad_scale;
         atomic_store_explicit(&g_touchhud_active, g_touchhud.active, memory_order_release);
         if (!g_touchhud.active && g_touchhud.map_rect_valid) {
             g_touchhud.map_rect_valid = 0;
@@ -322,9 +321,11 @@ static int transform_bounds(uint8_t *pane, float *left, float *bottom, float *ri
 static int touchhud_update_cluster_delta(uint8_t *pane) {
     float left, bottom, right, top;
     if (!transform_bounds(pane, &left, &bottom, &right, &top)) return 0;
+    float region[4],gain=dm_aspect_map_gain(); int seated=dm_aspect_region(1,region);
     pthread_mutex_lock(&g_touchhud_mu);
-    g_touchhud.map_dx = 640.0f + dm_aspect_hud_offset(1) - dm_touchpad_botw_map_right_inset(dm_aspect_ui_point_scale()) - right;
-    g_touchhud.map_dy = DM_TP_BOTW_MAP_TOP - top;
+    g_touchhud.map_dx = seated ? 59*gain-(left+right)*.5f :
+        640.0f + dm_aspect_hud_offset(1) - gain*dm_touchpad_botw_map_right_inset(dm_aspect_ui_point_scale()/gain) - right;
+    g_touchhud.map_dy = dm_aspect_hud_top() - top;
     g_touchhud.delta_valid = 1;
     pthread_mutex_unlock(&g_touchhud_mu);
     return 1;
@@ -345,10 +346,11 @@ static void publish_map_rect(uint8_t *pane) {
     }
     float edge_left = dm_aspect_hud_offset(0), edge_right = dm_aspect_hud_offset(1);
     float hud_width = 1280 + edge_left + edge_right;
+    float region[4],anchor=dm_aspect_region(1,region) ? 0 : edge_right;
     // The map's horizontal edge anchor is applied after native scissor
     // calculation, during GPU replay. Publish hits at that final position.
-    float x0 = fmaxf(0, (left + edge_right + 640.0f + edge_left) / hud_width);
-    float x1 = fminf(1, (right + edge_right + 640.0f + edge_left) / hud_width);
+    float x0 = fmaxf(0, (left + anchor + 640.0f + edge_left) / hud_width);
+    float x1 = fminf(1, (right + anchor + 640.0f + edge_left) / hud_width);
     float y0 = fmaxf(0, (360.0f - top) / 720.0f);
     float y1 = fminf(1, (360.0f - bottom) / 720.0f);
     if (x1 <= x0 || y1 <= y0) { invalidate_map_rect(); return; }
@@ -366,8 +368,11 @@ static void publish_map_rect(uint8_t *pane) {
 
 static void botw_touchhud_pane(const uint64_t *regs) {
     dm_aspect_ui_pane((uint8_t *)(uintptr_t)regs[0]);
-    if (!dm_botw_touch_hud_available()) return;
-    dm_botw_touch_menu_pane(regs, 0);
+    float region[4]; int seated=dm_aspect_region(1,region);
+    int touch=dm_botw_touch_hud_available(), narrow=dm_aspect_hud_y_scale()<1;
+    if (!touch && !narrow && !seated) return;
+    if (touch) dm_botw_touch_menu_pane(regs, 0);
+    int map_active=atomic_load_explicit(&g_touchhud_active,memory_order_acquire) || narrow || seated;
     uint8_t *pane = (uint8_t *)(uintptr_t)regs[0];
     if (!pane) return;
     // The child matrix hook may not run when a parent becomes hidden. Invalidate
@@ -394,14 +399,14 @@ static void botw_touchhud_pane(const uint64_t *regs) {
         invalidate_map_rect();
     if (map_cut_root(pane) || map_cut_sibling(pane) || map_ornament_root(pane)) {
         int moved = touchhud_delta_valid();
-        if (atomic_load_explicit(&g_touchhud_active, memory_order_acquire) || moved)
+        if (map_active || moved)
             pane[BOTW_TOUCH_FLAGS] |= BOTW_TOUCH_DIRTY;
         if (map_cut_root(pane)) {
             atomic_store(&g_touchhud_map_root, (uintptr_t)pane_parent(pane_parent(pane)));
             float w, h;
             memcpy(&w, pane + BOTW_TOUCH_SIZE, sizeof w);
             memcpy(&h, pane + BOTW_TOUCH_SIZE + 4, sizeof h);
-            int collapsed = atomic_load_explicit(&g_touchhud_active, memory_order_acquire) && map_cut_visible(pane) &&
+            int collapsed = map_active && map_cut_visible(pane) &&
                             isfinite(w) && isfinite(h) && fabsf(w - 166.0f) < 2.0f && fabsf(h - 166.0f) < 2.0f;
             atomic_store_explicit(&g_touchhud_map_collapsed, collapsed, memory_order_release);
             if (!collapsed) {
@@ -413,7 +418,7 @@ static void botw_touchhud_pane(const uint64_t *regs) {
     }
     if (main_environment_pane(pane)) {
         int delta_valid = touchhud_delta_valid();
-        if (atomic_load_explicit(&g_touchhud_active, memory_order_acquire) || atomic_load_explicit(&g_touchhud_map_collapsed, memory_order_acquire) || delta_valid)
+        if (map_active || atomic_load_explicit(&g_touchhud_map_collapsed, memory_order_acquire) || delta_valid)
             pane[BOTW_TOUCH_FLAGS] |= BOTW_TOUCH_DIRTY;
         return;
     }
@@ -439,31 +444,35 @@ static void botw_touchhud_pane(const uint64_t *regs) {
 }
 
 static void botw_touchhud_matrix(const uint64_t *regs) {
-    if (!dm_botw_touch_hud_available()) return;
-    dm_botw_touch_menu_pane(regs, 1);
+    float region[4]; int seated=dm_aspect_region(1,region);
+    int touch=dm_botw_touch_hud_available(), narrow=dm_aspect_hud_y_scale()<1;
+    if (!touch && !narrow && !seated) return;
+    if (touch) dm_botw_touch_menu_pane(regs, 1);
     uint8_t *pane = (uint8_t *)(uintptr_t)regs[19];
     if (!pane) return;
     int active = atomic_load_explicit(&g_touchhud_active, memory_order_acquire);
+    int map_active=active || narrow || seated;
     if (active && main_shortcut_rune_pane(pane)) {
         rune_icon_record(pane);
         return;
     }
     int collapsed = atomic_load_explicit(&g_touchhud_map_collapsed, memory_order_acquire);
     if ((uintptr_t)pane == atomic_load_explicit(&g_touchhud_pane, memory_order_acquire)) {
-        float tx, ty, x, y;
+        float tx, ty, x, y, scale;
         memcpy(&tx, pane + BOTW_TOUCH_MATRIX + 0x0c, sizeof tx);
         memcpy(&ty, pane + BOTW_TOUCH_MATRIX + 0x1c, sizeof ty);
         pthread_mutex_lock(&g_touchhud_mu);
         g_touchhud.home_x = tx; g_touchhud.home_y = ty; g_touchhud.home_valid = 1;
-        x = g_touchhud.x; y = g_touchhud.y;
+        x = g_touchhud.x; y = g_touchhud.y; scale = g_touchhud.dpad_scale;
         pthread_mutex_unlock(&g_touchhud_mu);
         if (active) {
             // Preserve the animated N_Pos_00 parent delta by translating the
             // freshly composed equipment matrix to the iOS virtual D-pad.
-            float dx = x * 1280.0f - 640.0f + 554.0f;
-            float dy = 360.0f - y * 720.0f - 246.0f;
+            float xscale=dm_aspect_hud_gain(), yscale=dm_aspect_hud_y_scale()*xscale;
+            float dx = x * 1280.0f - 640.0f + 554.0f*xscale;
+            float dy = 360.0f - y * 720.0f - 246.0f*yscale;
+            tx*=xscale; ty*=yscale;
             tx += dx; ty += dy;
-            float scale = g_touch_layout.control[12].scale;
             if (scale != 1) {
                 // Scale the equipment group about its relocated center.
                 for (int row = 0; row < 2; row++) for (int col = 0; col < 3; col++) {
@@ -481,7 +490,7 @@ static void botw_touchhud_matrix(const uint64_t *regs) {
     if (map_cut_root(pane)) {
         float w, h;
         memcpy(&w, pane + BOTW_TOUCH_SIZE, sizeof w); memcpy(&h, pane + BOTW_TOUCH_SIZE + 4, sizeof h);
-        collapsed = active && map_cut_visible(pane) && isfinite(w) && isfinite(h) &&
+        collapsed = map_active && map_cut_visible(pane) && isfinite(w) && isfinite(h) &&
                     fabsf(w - 166.0f) < 2.0f && fabsf(h - 166.0f) < 2.0f;
         atomic_store_explicit(&g_touchhud_map_collapsed, collapsed, memory_order_release);
         if (!collapsed) {
@@ -491,17 +500,23 @@ static void botw_touchhud_matrix(const uint64_t *regs) {
         if (!touchhud_update_cluster_delta(pane)) { invalidate_map_rect(); return; }
         pthread_mutex_lock(&g_touchhud_mu); float dx = g_touchhud.map_dx, dy = g_touchhud.map_dy; pthread_mutex_unlock(&g_touchhud_mu);
         float tx, ty; memcpy(&tx, pane + BOTW_TOUCH_MATRIX + 0x0c, 4); memcpy(&ty, pane + BOTW_TOUCH_MATRIX + 0x1c, 4);
-        tx += dx - dm_aspect_hud_offset(1); ty += dy; memcpy(pane + BOTW_TOUCH_MATRIX + 0x0c, &tx, 4); memcpy(pane + BOTW_TOUCH_MATRIX + 0x1c, &ty, 4);
+        tx += dx - (seated ? 0 : dm_aspect_hud_offset(1)); ty += dy; memcpy(pane + BOTW_TOUCH_MATRIX + 0x0c, &tx, 4); memcpy(pane + BOTW_TOUCH_MATRIX + 0x1c, &ty, 4);
         publish_map_rect(pane);
         return;
     }
     if (map_cut_sibling(pane) || map_ornament_root(pane) || main_environment_pane(pane)) {
         pthread_mutex_lock(&g_touchhud_mu);
-        int apply = active && collapsed && g_touchhud.delta_valid;
+        int apply = map_active && collapsed && g_touchhud.delta_valid;
         float dx = g_touchhud.map_dx, dy = g_touchhud.map_dy;
         pthread_mutex_unlock(&g_touchhud_mu);
         if (apply) {
-            if (!main_environment_pane(pane)) dx -= dm_aspect_hud_offset(1);
+            if (!seated && !main_environment_pane(pane)) dx -= dm_aspect_hud_offset(1);
+            // Weather retains its native model geometry. Replay scales the
+            // entire draw, including this translation, to the HUD canvas.
+            if (pane_named(pane,"Pa_Weather_00")) {
+                float gain=dm_aspect_map_gain();
+                dx /= gain; dy /= dm_aspect_hud_y_scale()*gain;
+            }
             float tx, ty;
             memcpy(&tx, pane + BOTW_TOUCH_MATRIX + 0x0c, sizeof tx);
             memcpy(&ty, pane + BOTW_TOUCH_MATRIX + 0x1c, sizeof ty);
@@ -521,7 +536,6 @@ void dm_botw_touch_hud_install(void) {
 #endif
     if (!touch && !dm_aspect_native()) return;
     if (strcmp(DM_GAME_ID, "01007EF00011E000")) return;
-    if (!dm_botw_layout_read(&g_touch_layout)) die("[RED] invalid BOTW touch layout setting");
     if (strcmp(dm_main_build(), BOTW_BUILD)) {
         LOG("BOTW touch HUD: disabled for main build %s (requires %s)", dm_main_build(), BOTW_BUILD);
         return;

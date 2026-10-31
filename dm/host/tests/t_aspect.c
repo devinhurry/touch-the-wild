@@ -39,6 +39,7 @@ int gate_obs_present(int id) { return (id == OBS_ASPECT_PROJECTION || id == OBS_
 static void pane_init(uint8_t *p, const char *name, float x, float w, float h) {
     memset(p,0,0x100); strcpy((char *)p+0xb8,name);
     *(float *)(p+0x30)=x; *(float *)(p+0x50)=w; *(float *)(p+0x54)=h;
+    *(float *)(p+0x48)=*(float *)(p+0x4c)=1;
 }
 static void pane_child(uint8_t *parent, uint8_t *child) {
     uint8_t *next=*(uint8_t **)(parent+0x28);
@@ -49,7 +50,7 @@ static void test_right_hud_padding(void) {
     const float w=932, h=430, insets[][2]={{0,62},{62,0},{62,62}};
     dm_aspect_set_display(w/h);
     for(unsigned i=0;i<sizeof insets/sizeof *insets;i++) {
-        dm_aspect_set_safe_area(w,h,insets[i][0],insets[i][1]);
+        dm_aspect_set_safe_area(w, h, insets[i][0], 0, insets[i][1]);
         for(int touch=0;touch<2;touch++) {
             test_touch_active=touch;
             float rect[4]; dm_aspect_hud_rect(w,h,rect);
@@ -61,7 +62,7 @@ static void test_right_hud_padding(void) {
         }
     }
     // Explicit aspect bars still bound the HUD to the actual game picture.
-    g_custom=21.f/10; dm_aspect_set_safe_area(w,h,62,62);
+    g_custom=21.f/10; dm_aspect_set_safe_area(w, h, 62, 0, 62);
     float rect[4]; dm_aspect_hud_rect(w,h,rect);
     assert(fabsf(rect[0]+rect[2]-(w+h*g_custom)*.5f)<.001f);
     g_custom=0; test_touch_active=0;
@@ -73,7 +74,7 @@ static void test_edge_hud(void) {
     pane_init(heart,"Pa_HeartGauge_00",-434,312,50); pane_child(state,heart);
     pane_init(glyph,"P_Heart_00",20,32,32); pane_child(heart,glyph);
     pane_init(sensor,"Pa_Sensor_00",392,582,78); pane_child(all,sensor);
-    dm_aspect_set_display(21.f/10); dm_aspect_set_safe_area(1512,720,0,0);
+    dm_aspect_set_display(21.f/10); dm_aspect_set_safe_area(1512, 720, 0, 0, 0);
     for (int i=0;i<20;i++) { dm_aspect_ui_pane(heart); dm_aspect_ui_pane(sensor); }
     assert(fabsf(*(float *)(heart+0x30)+548)<.001f && *(float *)(heart+0x50)==312);
     assert(fabsf(*(float *)(sensor+0x30)-508)<.001f && *(float *)(sensor+0x50)==582);
@@ -96,14 +97,14 @@ static void test_edge_hud(void) {
     dm_aspect_ui_pane(inout); dm_aspect_ui_pane(ornaments);
     assert(*(float *)(inout+0x30)==0 && *(float *)(ornaments+0x30)==0);
     draw_callback(regs); assert(!dm_aspect_ui_hud_drawing()); draw_end_callback(regs);
-    dm_aspect_set_safe_area(1512,720,40,20); dm_aspect_ui_pane(heart); dm_aspect_ui_pane(sensor);
+    dm_aspect_set_safe_area(1512, 720, 40, 0, 20); dm_aspect_ui_pane(heart); dm_aspect_ui_pane(sensor);
     assert(fabsf(*(float *)(heart+0x30)+548)<.001f && fabsf(*(float *)(sensor+0x30)-508)<.001f);
     float rect[4]; dm_aspect_hud_rect(1512,720,rect);
     assert(fabsf(rect[0]-40)<.001f && fabsf(rect[2]-1472)<.001f && rect[1]==0 && rect[3]==720);
     dm_aspect_touch_rect(1512,720,rect); assert(fabsf(rect[0]-116)<.001f && rect[2]==1280);
     dm_aspect_set_display(GAME_ASPECT); dm_aspect_ui_pane(heart); dm_aspect_ui_pane(sensor);
     assert(*(float *)(heart+0x30)==-432 && *(float *)(sensor+0x30)==392);
-    dm_aspect_set_safe_area(1280,720,0,0);
+    dm_aspect_set_safe_area(1280, 720, 0, 0, 0);
     uint8_t fade[0x100],logo[0x100],upper[0x100];
     pane_init(fade,"RootPane",0,1280,720); pane_init(logo,"N_LogoInOut_00",0,30,40); pane_child(fade,logo);
     pane_init(upper,"P_Capture_00",0,1280,275); pane_child(logo,upper);
@@ -111,6 +112,121 @@ static void test_edge_hud(void) {
     assert(*(float *)(upper+0x50)==1280 && *(float *)(upper+0x54)==275);
     regs[21]=(uintptr_t)upper; draw_callback(regs); assert(dm_aspect_ui_background_drawing()==2); draw_end_callback(regs);
     dm_aspect_set_display(GAME_ASPECT); dm_aspect_ui_pane(upper); assert(*(float *)(upper+0x50)==1280);
+}
+static void test_narrow_hud(void) {
+    uint8_t root[0x100],all[0x100],state[0x100],heart[0x100],glyph[0x100],menu[0x100];
+    pane_init(root,"RootPane",0,1280,720); pane_init(all,"N_All_00",0,30,30); pane_child(root,all);
+    pane_init(state,"N_State_00",0,40,40); pane_child(all,state);
+    pane_init(heart,"Pa_HeartGauge_00",-434,312,50); pane_child(state,heart); *(float *)(heart+0x34)=300;
+    pane_init(glyph,"P_Heart_00",0,32,32); pane_child(heart,glyph);
+    pane_init(menu,"T_Text_00",0,100,40); *(float *)(menu+0x34)=123;
+    uint8_t weather[0x100],weather_body[0x100],weather_icon[0x100];
+    pane_init(weather,"Pa_Weather_00",0,899.5f,644); pane_child(all,weather);
+    pane_init(weather_body,"N_InOut_00",362,30,30); pane_child(weather,weather_body);
+    pane_init(weather_icon,"Nt_WeatherNow_00",0,32,32); pane_child(weather_body,weather_icon);
+    uint8_t map[0x100],inout[0x100],cut[0x100],sibling[0x100],picture[0x100];
+    pane_init(map,"RootPane",0,1280,720); pane_init(inout,"N_InOut_00",0,30,30); pane_child(map,inout);
+    pane_init(cut,"N_Cut_00",0,166,166); pane_child(inout,cut);
+    pane_init(sibling,"N_Cut_01",0,1500,1500); pane_child(inout,sibling);
+    pane_init(picture,"P_MapCapture_00",0,192,192); pane_child(sibling,picture);
+    uint8_t fade[0x100],logo[0x100],upper[0x100],black[0x100];
+    pane_init(fade,"RootPane",0,1280,720); pane_init(logo,"N_LogoInOut_00",0,30,40); pane_child(fade,logo);
+    pane_init(upper,"P_Capture_00",0,1280,275); pane_child(logo,upper);
+    pane_init(black,"P_Black_00",0,1280,445); pane_child(fade,black);
+    const float ratios[]={4.f/3,9.f/16}; uint64_t regs[31]={0};
+    for (unsigned i=0;i<sizeof ratios/sizeof *ratios;i++) {
+        float ratio=ratios[i], f=ratio/GAME_ASPECT, gain=GAME_ASPECT*fminf(1,1/ratio), rect[4];
+        float sy=f*gain;
+        dm_aspect_set_display(ratio); dm_aspect_set_safe_area(720*ratio,720,0,40,0);
+        for (int n=0;n<10;n++) { dm_aspect_ui_pane(heart); dm_aspect_ui_pane(inout); }
+        for (int n=0;n<10;n++) dm_aspect_ui_pane(weather);
+        assert(*(float *)(weather+0x48)==1 && *(float *)(weather+0x4c)==1);
+        regs[21]=(uintptr_t)weather_icon; draw_callback(regs);
+        assert(dm_aspect_ui_hud_drawing()==3); draw_end_callback(regs);
+        assert(fabsf(*(float *)(heart+0x34)-(300*sy+360*(1-sy)-40))<.001f);
+        assert(fabsf(*(float *)(heart+0x30)-((-434+640)*gain-640+DM_TP_BOTW_EDGE_EXTRA*dm_aspect_ui_point_scale()))<.001f);
+        assert(fabsf(*(float *)(heart+0x48)-gain)<.001f && fabsf(*(float *)(heart+0x4c)-sy)<.001f);
+        assert(*(float *)(heart+0x50)==312);
+        assert(fabsf(*(float *)(inout+0x48)-gain)<.001f && fabsf(*(float *)(inout+0x4c)-sy)<.001f);
+        dm_aspect_hud_rect(720*ratio,720,rect); assert(fabsf(rect[1])<.001f && fabsf(rect[3]-720)<.001f);
+        dm_aspect_touch_rect(720*ratio,720,rect); assert(rect[1]>0 && fabsf(rect[3]-720*f)<.001f);
+        assert(fabsf(dm_aspect_hud_top()-(360-20*sy-40))<.001f);
+        dm_aspect_ui_pane(menu); assert(*(float *)(menu+0x34)==123 && *(float *)(menu+0x4c)==1);
+        regs[21]=(uintptr_t)glyph; draw_callback(regs); assert(dm_aspect_ui_hud_drawing()==1); draw_end_callback(regs);
+        regs[21]=(uintptr_t)picture; draw_callback(regs); assert(dm_aspect_ui_hud_drawing()==2); draw_end_callback(regs);
+        *(float *)(cut+0x50)=1500; *(float *)(cut+0x54)=720; dm_aspect_ui_pane(inout);
+        assert(*(float *)(inout+0x48)==1 && *(float *)(inout+0x4c)==1);
+        draw_callback(regs); assert(!dm_aspect_ui_hud_drawing()); draw_end_callback(regs);
+        *(float *)(cut+0x50)=*(float *)(cut+0x54)=166;
+        for (int b=0;b<2;b++) {
+            regs[21]=(uintptr_t)(b?black:upper); draw_callback(regs);
+            assert(dm_aspect_ui_background_drawing()==2); draw_end_callback(regs);
+        }
+    }
+    dm_aspect_set_display(GAME_ASPECT); dm_aspect_set_safe_area(1280,720,0,0,0);
+    dm_aspect_ui_pane(heart); dm_aspect_ui_pane(inout); dm_aspect_ui_pane(weather);
+    assert(*(float *)(heart+0x34)==300 && *(float *)(heart+0x48)==1 && *(float *)(heart+0x4c)==1);
+    assert(*(float *)(inout+0x48)==1 && *(float *)(inout+0x4c)==1);
+    assert(*(float *)(weather+0x48)==1 && *(float *)(weather+0x4c)==1);
+}
+
+static void test_seated_regions(void) {
+    const float widths[]={795,1200};
+    for (unsigned n=0;n<2;n++) {
+        float w=widths[n],h=1100,picture[4],dock[4],hit[4];
+        dm_aspect_set_display(w/h); dm_aspect_set_seated(.49f,.51f);
+        dm_aspect_set_safe_area(w,h,0,0,0);
+        assert(dm_aspect_region(0,picture) && dm_aspect_region(1,dock));
+        assert(fabsf(dm_aspect_ratio()-w/(h*.49f))<.00001f);
+        assert(fabsf(dm_aspect_control_ratio()-w/(h*.49f))<.00001f);
+        dm_aspect_touch_rect(w,h,hit);
+        assert(hit[1]>=0 && hit[1]+hit[3]<=h*.49f+.001f);
+        dm_aspect_hud_rect(w,h,hit);
+        assert(fabsf(hit[1]-h*.51f)<.001f && fabsf(hit[3]-h*.49f)<.001f);
+        dm_touchpad_rect map=dm_touchpad_seated_map((dm_touchpad_rect){0,h*.51f,w,h*.49f});
+        float gain=dm_aspect_map_gain(),sy=dm_aspect_hud_y_scale();
+        assert(fabsf(166*gain*sy*hit[3]/720-map.width)<.001f);
+        assert(fabsf((360-dm_aspect_hud_top())*hit[3]/720-DM_TP_BOTW_DOCK_TOP)<.001f);
+        uint8_t root[0x100],all[0x100],state[0x100],heart[0x100],weather[0x100],sensor[0x100],equipment[0x100];
+        pane_init(root,"RootPane",0,1280,720); pane_init(all,"N_All_00",0,30,30); pane_child(root,all);
+        pane_init(state,"N_State_00",0,40,40); pane_child(all,state);
+        pane_init(heart,"Pa_HeartGauge_00",-434,312,50); pane_child(state,heart);
+        pane_init(weather,"Pa_Weather_00",0,40,40); pane_child(all,weather);
+        pane_init(sensor,"Pa_Sensor_00",0,40,40); pane_child(all,sensor);
+        pane_init(equipment,"N_MainAll_00",0,40,40); pane_child(all,equipment);
+        uint64_t regs[31]={0}; test_touch_active=1;
+        uint8_t *panes[]={heart,sensor,weather,equipment}; const int scopes[]={1,4,3,5};
+        for (unsigned i=0;i<4;i++) {
+            dm_aspect_ui_pane(panes[i]); regs[21]=(uintptr_t)panes[i]; draw_callback(regs);
+            assert(dm_aspect_ui_hud_drawing()==scopes[i]); draw_end_callback(regs);
+        }
+        assert(fabsf(*(float *)(sensor+0x48)-gain)<.001f);
+        assert(*(float *)(weather+0x48)==1 && *(float *)(weather+0x4c)==1);
+        test_touch_active=0; regs[21]=(uintptr_t)equipment; draw_callback(regs);
+        assert(!dm_aspect_ui_hud_drawing()); draw_end_callback(regs);
+        dm_aspect_set_seated(0,0); dm_aspect_set_display(GAME_ASPECT); dm_aspect_set_safe_area(1280,720,0,0,0);
+        dm_aspect_ui_pane(sensor); assert(*(float *)(sensor+0x48)==1 && *(float *)(sensor+0x4c)==1);
+        assert(!dm_aspect_region(1,dock) && dock[0]==0 && dock[1]==0 && dock[2]==1 && dock[3]==1);
+    }
+    // Fixed aspects fit only the upper picture; lower HUD and input remain full width.
+    dm_aspect_set_display(795.f/1100); dm_aspect_set_seated(.49f,.51f);
+    const float aspects[]={1,2.8f};
+    for (unsigned i=0;i<2;i++) {
+        g_custom=aspects[i]; float picture[4],dock[4],hit[4];
+        dm_aspect_set_safe_area(795,1100,0,30,0);
+        assert(dm_aspect_region(0,picture) && dm_aspect_region(1,dock));
+        assert(fabsf(795*picture[2]/(1100*picture[3])-g_custom)<.00001f);
+        assert(picture[1]>=0 && picture[1]+picture[3]<=.49f+.00001f);
+        assert(dock[0]==0 && dock[2]==1 && dock[1]==.51f && dock[3]==1-.51f);
+        dm_aspect_touch_rect(795,1100,hit);
+        assert(hit[0]>=795*picture[0]-.001f && hit[1]>=1100*picture[1]-.001f);
+        assert(hit[0]+hit[2]<=795*(picture[0]+picture[2])+.001f);
+        assert(hit[1]+hit[3]<=1100*(picture[1]+picture[3])+.001f);
+    }
+    g_custom=0;
+    dm_aspect_set_seated(.5f,.5f); float r[4]; assert(dm_aspect_region(0,r)); // zero-thickness division
+    dm_aspect_set_seated(NAN,.6f); assert(!dm_aspect_region(0,r));
+    dm_aspect_set_seated(.8f,.2f); assert(!dm_aspect_region(0,r));
 }
 static void failure(const char *value, int bad_build, int stale) {
     pid_t pid = fork(); assert(pid >= 0);
@@ -266,5 +382,7 @@ int main(void) {
     assert(fabsf(hit[0] - 77.3333f) < 0.001f && fabsf(hit[2] - 853.3333f) < 0.001f);
     test_right_hud_padding();
     test_edge_hud();
+    test_narrow_hud();
+    test_seated_regions();
     free(g_mod[0].base); puts("aspect: camera, centered content/hit regions and independent fullscreen backgrounds passed");
 }

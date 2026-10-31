@@ -77,6 +77,15 @@ int main(void) {
       EXPECT("no cap preserves game pacing",2,present_itv(&w));
       _Alignas(8) uint8_t state[64]={0};float cap=60;memcpy(state,&cap,4);dm_fps_state=state;
       EXPECT("stub state takes precedence over env",60,fps_present_cap());
+      resolution_budget(60);
+      EXPECT("disabled resolution budget stays disabled",0,*(uint32_t *)(state+0x38));
+      float normalization=100;memcpy(state+0x38,&normalization,4);
+      resolution_budget(60);memcpy(&normalization,state+0x38,4);
+      EXPECT("60 fps retargets native GPU normalization",200,(int)normalization);
+      resolution_budget(30);memcpy(&normalization,state+0x38,4);
+      EXPECT("movie / thermal 30 cap restores native budget",100,(int)normalization);
+      resolution_budget(60);resolution_budget(0);memcpy(&normalization,state+0x38,4);
+      EXPECT("uncapped native mode keeps original budget",100,(int)normalization);
       *(uint32_t *)(state+4)=1;
       EXPECT("the state page's movie flag is the host's copy, not read for the cap",60,fps_present_cap());
       dm_fps_state=NULL;unsetenv("DM_FPS_TARGET");g_present_cap=-1;nvn_present_config(0,0);
@@ -310,6 +319,21 @@ int main(void) {
         P(nvnCommandBufferEndRecording)(&c2); memcpy(&rh, m, sizeof rh);
         ad = draw_rec(m + 8, rh.size, &array_draw);
         EXPECT("map scope preserves compact draw size and native arguments", 1, P(nvnCommandBufferGetCommandMemoryUsed)(&c2)==0x28 && ad->pad==NVN_UI_MAP && ad->base_instance==0 && ad->instances==1);
+        test_ui_hud = 3;
+        P(nvnCommandBufferAddCommandMemory)(&c2, &mp, 0, sizeof m); P(nvnCommandBufferBeginRecording)(&c2);
+        P(nvnCommandBufferDrawArrays)(&c2, NVN_DRAW_PRIMITIVE_TRIANGLES, 0, 6);
+        P(nvnCommandBufferEndRecording)(&c2); memcpy(&rh, m, sizeof rh);
+        ad = draw_rec(m + 8, rh.size, &array_draw);
+        EXPECT("weather scope preserves compact draw size and native arguments", 1, P(nvnCommandBufferGetCommandMemoryUsed)(&c2)==0x28 && ad->pad==NVN_UI_WEATHER && ad->base_instance==0 && ad->instances==1);
+        const int dock_scopes[]={NVN_UI_DOCK_ENV,NVN_UI_DOCK_EQUIPMENT};
+        for (int i=0;i<2;i++) {
+            test_ui_hud=4+i;
+            P(nvnCommandBufferAddCommandMemory)(&c2,&mp,0,sizeof m); P(nvnCommandBufferBeginRecording)(&c2);
+            P(nvnCommandBufferDrawArrays)(&c2,NVN_DRAW_PRIMITIVE_TRIANGLES,0,6);
+            P(nvnCommandBufferEndRecording)(&c2); memcpy(&rh,m,sizeof rh); ad=draw_rec(m+8,rh.size,&array_draw);
+            EXPECT("Seated scope preserves compact draw ABI and original native arguments",1,
+                P(nvnCommandBufferGetCommandMemoryUsed)(&c2)==0x28 && ad->pad==dock_scopes[i] && ad->base_instance==0 && ad->instances==1);
+        }
         test_ui_hud = 0;
         test_ui_background = 2;
         P(nvnCommandBufferAddCommandMemory)(&c2, &mp, 0, sizeof m); P(nvnCommandBufferBeginRecording)(&c2);

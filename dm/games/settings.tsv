@@ -16,10 +16,11 @@
 #             format=number  plain numeric range label; percent is the default
 #             level=basic  a setting a front end shows first;  needs=<VAR>=<value>  a sub-setting, drawn only while the row that sets <VAR> has that value
 DM_FPS_TARGET	choice	30=30 fps,60=60 fps	DM_GAME_FPS_TARGET	DM_GAME_FPS_TARGET!=0	Game	Frame rate		level=basic
-DM_DYNAMIC_RESOLUTION	toggle	-	0	fixups:DYNAMIC_RESOLUTION	Game	Dynamic resolution	Adjusts resolution between 70% and 100% under load. Turn off to keep full resolution for the selected console mode.
+DM_DYNAMIC_RESOLUTION	toggle	-	0	fixups:DYNAMIC_RESOLUTION	Game	Dynamic resolution	Adjusts 3D resolution under load to help maintain frame rate. A fixed Render scale takes precedence.
 DM_RENDER_SCALE	range	0.5:1.0:0.05	1.0	fixups:RENDER_SCALE	Game	Render scale		level=basic
 DM_OPMODE	choice	1=Docked,0=Handheld	DM_GAME_OPMODE	always	Game	Console mode		level=basic
-DM_PRESENT_UPSCALE	choice	off=Standard,metalfx=MetalFX	off	always	Game	Upscaling	Uses more GPU time and can increase heat.
+DM_PRESENT_UPSCALE	choice	off=Standard,scene=Scene MetalFX,metalfx=Full-screen MetalFX	off	DM_GAME_SCENE_UPSCALE_PS!=	Game	Upscaling	Scene MetalFX (experimental) scales 3D only; Full-screen MetalFX also scales text and UI. Uses more GPU time and can increase heat.
+DM_PRESENT_UPSCALE	choice	off=Standard,metalfx=Full-screen MetalFX	off	DM_GAME_SCENE_UPSCALE_PS==	Game	Upscaling	Uses more GPU time and can increase heat.
 DM_LANG	choice	languages	build:DM_LANG	languages>1	Game	Game language		level=basic
 DM_FULLSCREEN	choice	0=Window,1=Fullscreen	0	platform:mac	Game	Display mode		level=basic
 DM_SHOW_FPS	toggle	-	build:DM_SHOW_FPS	platform:ios	Game	Frame-rate counter
@@ -53,6 +54,41 @@ DM_BOTW_PAD_DPAD_Y	range	-0.5:0.5:0.001	0.000	DM_GAME_ID==01007EF00011E000	Touch
 DM_BOTW_PAD_DPAD_SCALE	range	0.5:1.5:0.01	1.000	DM_GAME_ID==01007EF00011E000	Touch layout	D-pad: Size	Applies only to BOTW touch controls.
 DM_BOTW_PAD_FACE_GAP	range	0.5:1.5:0.01	1.060	DM_GAME_ID==01007EF00011E000	Touch layout	XYAB: Button spacing	Changes spacing within the group.
 DM_BOTW_PAD_BADGES	toggle	-	0	DM_GAME_ID==01007EF00011E000	Touch layout	Corner button labels	Shows the small letter circles on L, R, ZR and XYAB.
+DM_BOTW_PORTRAIT	toggle	-	0	DM_GAME_ID==01007EF00011E000	Touch layout	Enable portrait mode	Allows portrait rotation. Tall windows use compact controls below 600pt of available width; wider windows keep the normal layout.
+DM_BOTW_PORTRAIT_MOVE_DEADZONE	range	0:0.3:0.01	0.070	DM_GAME_ID==01007EF00011E000	Touch left stick	Deadzone	Ignores small movements near the touch-down point.
+DM_BOTW_PORTRAIT_MOVE_CURVE	range	0.3:2:0.05	0.300	DM_GAME_ID==01007EF00011E000	Touch left stick	Response curve	Lower values make short drags stronger. 1.00 is linear.	format=number
+DM_BOTW_PORTRAIT_MOVE_FULL	range	0.35:1:0.01	0.710	DM_GAME_ID==01007EF00011E000	Touch left stick	Full movement at	Finger travel needed to reach maximum stick strength.
+DM_BOTW_PORTRAIT_MOVE_SIZE	range	0.6:1.5:0.05	0.800	DM_GAME_ID==01007EF00011E000	Touch left stick	Stick size	Scales the whole left stick, including its drag range.
+DM_BOTW_PORTRAIT_PAD_A_X	range	-0.5:0.5:0.001	0.000	DM_GAME_ID==01007EF00011E000	Touch layout	A: Horizontal offset	Applies only to BOTW compact touch controls.
+DM_BOTW_PORTRAIT_PAD_A_Y	range	-0.5:0.5:0.001	0.000	DM_GAME_ID==01007EF00011E000	Touch layout	A: Vertical offset	Applies only to BOTW compact touch controls.
+DM_BOTW_PORTRAIT_PAD_A_SCALE	range	0.5:1.5:0.01	1.100	DM_GAME_ID==01007EF00011E000	Touch layout	A: Size	Applies only to BOTW compact touch controls.
+DM_BOTW_PORTRAIT_PAD_B_X	range	-0.5:0.5:0.001	0.000	DM_GAME_ID==01007EF00011E000	Touch layout	B: Horizontal offset	Applies only to BOTW compact touch controls.
+DM_BOTW_PORTRAIT_PAD_B_Y	range	-0.5:0.5:0.001	0.000	DM_GAME_ID==01007EF00011E000	Touch layout	B: Vertical offset	Applies only to BOTW compact touch controls.
+DM_BOTW_PORTRAIT_PAD_B_SCALE	range	0.5:1.5:0.01	1.100	DM_GAME_ID==01007EF00011E000	Touch layout	B: Size	Applies only to BOTW compact touch controls.
+DM_BOTW_PORTRAIT_PAD_X_X	range	-0.5:0.5:0.001	0.000	DM_GAME_ID==01007EF00011E000	Touch layout	X: Horizontal offset	Applies only to BOTW compact touch controls.
+DM_BOTW_PORTRAIT_PAD_X_Y	range	-0.5:0.5:0.001	0.000	DM_GAME_ID==01007EF00011E000	Touch layout	X: Vertical offset	Applies only to BOTW compact touch controls.
+DM_BOTW_PORTRAIT_PAD_X_SCALE	range	0.5:1.5:0.01	1.100	DM_GAME_ID==01007EF00011E000	Touch layout	X: Size	Applies only to BOTW compact touch controls.
+DM_BOTW_PORTRAIT_PAD_Y_X	range	-0.5:0.5:0.001	0.000	DM_GAME_ID==01007EF00011E000	Touch layout	Y: Horizontal offset	Applies only to BOTW compact touch controls.
+DM_BOTW_PORTRAIT_PAD_Y_Y	range	-0.5:0.5:0.001	0.000	DM_GAME_ID==01007EF00011E000	Touch layout	Y: Vertical offset	Applies only to BOTW compact touch controls.
+DM_BOTW_PORTRAIT_PAD_Y_SCALE	range	0.5:1.5:0.01	1.100	DM_GAME_ID==01007EF00011E000	Touch layout	Y: Size	Its default diameter is 10pt larger than X; A and B are 10pt smaller than X.
+DM_BOTW_PORTRAIT_PAD_STICK_X	range	-0.5:0.5:0.001	0.000	DM_GAME_ID==01007EF00011E000	Touch layout	Left stick: Horizontal offset	Applies only to BOTW touch controls.
+DM_BOTW_PORTRAIT_PAD_STICK_Y	range	-0.5:0.5:0.001	0.000	DM_GAME_ID==01007EF00011E000	Touch layout	Left stick: Vertical offset	Applies only to BOTW touch controls.
+DM_BOTW_PORTRAIT_PAD_ZL_X	range	-0.5:0.5:0.001	0.000	DM_GAME_ID==01007EF00011E000	Touch layout	Shield stick: Horizontal offset	Applies only to BOTW touch controls.
+DM_BOTW_PORTRAIT_PAD_ZL_Y	range	-0.5:0.5:0.001	0.000	DM_GAME_ID==01007EF00011E000	Touch layout	Shield stick: Vertical offset	Applies only to BOTW touch controls.
+DM_BOTW_PORTRAIT_PAD_ZL_SCALE	range	0.5:1.5:0.01	1.000	DM_GAME_ID==01007EF00011E000	Touch layout	Shield stick: Size	Applies only to BOTW touch controls.
+DM_BOTW_PORTRAIT_PAD_L_X	range	-0.5:0.5:0.001	0.000	DM_GAME_ID==01007EF00011E000	Touch layout	Rune: Horizontal offset	Applies only to BOTW touch controls.
+DM_BOTW_PORTRAIT_PAD_L_Y	range	-0.5:0.5:0.001	0.000	DM_GAME_ID==01007EF00011E000	Touch layout	Rune: Vertical offset	Applies only to BOTW touch controls.
+DM_BOTW_PORTRAIT_PAD_L_SCALE	range	0.5:1.5:0.01	1.200	DM_GAME_ID==01007EF00011E000	Touch layout	Rune: Size	Applies only to BOTW touch controls.
+DM_BOTW_PORTRAIT_PAD_R_X	range	-0.5:0.5:0.001	0.000	DM_GAME_ID==01007EF00011E000	Touch layout	R: Horizontal offset	Applies only to BOTW touch controls.
+DM_BOTW_PORTRAIT_PAD_R_Y	range	-0.5:0.5:0.001	0.000	DM_GAME_ID==01007EF00011E000	Touch layout	R: Vertical offset	Applies only to BOTW touch controls.
+DM_BOTW_PORTRAIT_PAD_R_SCALE	range	0.5:1.5:0.01	1.100	DM_GAME_ID==01007EF00011E000	Touch layout	R: Size	Applies only to BOTW touch controls.
+DM_BOTW_PORTRAIT_PAD_ZR_X	range	-0.5:0.5:0.001	0.000	DM_GAME_ID==01007EF00011E000	Touch layout	ZR: Horizontal offset	Applies only to BOTW touch controls.
+DM_BOTW_PORTRAIT_PAD_ZR_Y	range	-0.5:0.5:0.001	0.000	DM_GAME_ID==01007EF00011E000	Touch layout	ZR: Vertical offset	Applies only to BOTW touch controls.
+DM_BOTW_PORTRAIT_PAD_ZR_SCALE	range	0.5:1.5:0.01	1.100	DM_GAME_ID==01007EF00011E000	Touch layout	ZR: Size	Applies only to BOTW touch controls.
+DM_BOTW_PORTRAIT_PAD_DPAD_X	range	-0.5:0.5:0.001	0.000	DM_GAME_ID==01007EF00011E000	Touch layout	D-pad: Horizontal offset	Applies only to BOTW touch controls.
+DM_BOTW_PORTRAIT_PAD_DPAD_Y	range	-0.5:0.5:0.001	0.000	DM_GAME_ID==01007EF00011E000	Touch layout	D-pad: Vertical offset	Applies only to BOTW touch controls.
+DM_BOTW_PORTRAIT_PAD_DPAD_SCALE	range	0.5:1.5:0.01	1.000	DM_GAME_ID==01007EF00011E000	Touch layout	D-pad: Size	Applies only to BOTW touch controls.
+DM_BOTW_PORTRAIT_PAD_BADGES	toggle	-	0	DM_GAME_ID==01007EF00011E000	Touch layout	Corner button labels	Shows the small letter circles on L, R, ZR and XYAB.
 DM_FRAMEGEN	toggle	30/0	0	DM_GAME_FRAMEGEN_SCENE!=	Performance	Experimental frame generation	Docked rendering only. MetalFX inserts one picture between 30 real game frames per second. Adds GPU work and display latency; requires a supported GPU. Applies on Play.	level=basic;needs=DM_OPMODE=1
 DM_LOW_MEMORY	toggle	-	0	DM_GAME_ID==01007EF00011E000	Performance	Experimental low-memory mode	May reduce memory use at the cost of more storage activity and pauses in new scenes. Applies when you press Play.
 DM_PRESENT_SNAP	toggle	-	DM_GAME_PRESENT_SNAP	gfxapi:nvn	Performance	Frame buffering	Up to one frame more display latency.

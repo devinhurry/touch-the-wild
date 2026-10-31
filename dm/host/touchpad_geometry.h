@@ -5,6 +5,19 @@
 typedef struct { float x, y; } dm_touchpad_point;
 typedef struct { float x, y, width, height; } dm_touchpad_rect;
 
+// A vertical book fold leaves edge controls alone. A horizontal Seated fold
+// separates the picture above it from touch controls below it.
+static inline int dm_touchpad_seated_split(dm_touchpad_rect area, dm_touchpad_rect fold,
+                                          dm_touchpad_rect *picture, dm_touchpad_rect *controls) {
+    *picture=*controls=area;
+    if (!isfinite(fold.x) || !isfinite(fold.y) || !isfinite(fold.width) || !isfinite(fold.height) ||
+        fold.width<=fold.height || fold.height<0 || fold.width<area.width*.5f ||
+        fold.y<=area.y || fold.y+fold.height>=area.y+area.height) return 0;
+    picture->height=fold.y-area.y;
+    controls->y=fold.y+fold.height; controls->height=area.y+area.height-controls->y;
+    return 1;
+}
+
 #include "dm_input.h"
 
 #define DM_TP_ZL_X 44.0f
@@ -58,6 +71,19 @@ typedef struct { float x, y, width, height; } dm_touchpad_rect;
 #define DM_TP_BOTW_MENU_GLYPH_SIZE 19.0f
 #define DM_TP_BOTW_MENU_Y_OFFSET 4.0f
 #define DM_TP_BOTW_MENU_GAP 8.0f
+#define DM_TP_BOTW_DOCK_TOP 8.0f
+static inline dm_touchpad_rect dm_touchpad_seated_map(dm_touchpad_rect area) {
+    float size=fminf(166.f*430/720,area.width*.16f);
+    // The linked gauges extend 118 native units to the map's left.
+    return (dm_touchpad_rect){area.x+area.width*.5f+size*59/166-size*.5f,
+        area.y+DM_TP_BOTW_DOCK_TOP,size,size};
+}
+static inline dm_touchpad_rect dm_touchpad_seated_menu(dm_touchpad_rect area,int minus) {
+    dm_touchpad_rect map=dm_touchpad_seated_map(area);
+    float size=DM_TP_BOTW_MENU_SIZE*map.width/166;
+    return (dm_touchpad_rect){map.x+map.width+DM_TP_BOTW_MENU_GAP,
+        map.y+(minus ? size+DM_TP_BOTW_MENU_GAP : 0),size,size};
+}
 
 static inline float dm_touchpad_u(float height) {
     float u = height / 430.0f;
@@ -174,7 +200,7 @@ static inline int dm_touchpad_rounded_rect_contains(dm_touchpad_rect r, float ra
 }
 
 // One fixed + anchor beside the relocated minimap, including in shrines.
-// Size follows the aspect canvas; y-offset is in frontend points.
+// Size follows the canvas's shorter edge; y-offset is in frontend points.
 static inline float dm_touchpad_botw_map_right_inset(float points_to_native) {
     return DM_TP_BOTW_HEART_EDGE + (DM_TP_BOTW_MENU_SIZE + DM_TP_BOTW_MENU_GLYPH_SIZE)*.5f +
         (DM_TP_BOTW_EDGE_EXTRA + DM_TP_BOTW_MENU_GAP)*points_to_native;
@@ -182,10 +208,11 @@ static inline float dm_touchpad_botw_map_right_inset(float points_to_native) {
 static inline dm_touchpad_rect dm_touchpad_botw_menu_rect(float canvas_x, float canvas_y,
                                                            float canvas_width, float canvas_height,
                                                            int minus) {
-    float size = DM_TP_BOTW_MENU_SIZE * canvas_height / 720.0f;
+    float scale = fminf(canvas_width, canvas_height) / 720.0f;
+    float size = DM_TP_BOTW_MENU_SIZE * scale;
     return (dm_touchpad_rect){canvas_x + canvas_width -
-        (DM_TP_BOTW_HEART_EDGE + (DM_TP_BOTW_MENU_SIZE + DM_TP_BOTW_MENU_GLYPH_SIZE)*.5f)*canvas_height/720.0f - DM_TP_BOTW_EDGE_EXTRA,
-        canvas_y + (360.0f - DM_TP_BOTW_MAP_TOP) * canvas_height / 720.0f + DM_TP_BOTW_MENU_Y_OFFSET +
+        (DM_TP_BOTW_HEART_EDGE + (DM_TP_BOTW_MENU_SIZE + DM_TP_BOTW_MENU_GLYPH_SIZE)*.5f)*scale - DM_TP_BOTW_EDGE_EXTRA,
+        canvas_y + (360.0f - DM_TP_BOTW_MAP_TOP) * scale + DM_TP_BOTW_MENU_Y_OFFSET +
             (minus ? size + DM_TP_BOTW_MENU_GAP : 0), size, size};
 }
 

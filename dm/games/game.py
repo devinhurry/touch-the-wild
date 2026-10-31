@@ -144,6 +144,9 @@ def header(g):
     if cw and not re.fullmatch(r'(?:[0-9]|1[0-9]|2[0-8]):0x[0-9a-f]+', cw): sys.exit(f'{g.id}: camera_world_aspect must be <owner register 0..28>:<projection member offset> (hex)')
     au = g.get('aspect_ui', '')   # vertex shader identities of the game's font and layout libraries; runtime viewport transform only
     ac = g.get('aspect_canvas', '')   # fragment shader that composites the UI canvas into the present target
+    scene = g.get('scene_upscale', '').split()
+    if scene and (len(scene) != 2 or any(not re.fullmatch(r'[0-9a-f]{16}', k) for k in scene)):
+        sys.exit(f'{g.id}: scene_upscale must name the verified scene-composite vertex and pixel shader keys')
     fg_scene = g.get('framegen_scene', '')
     fg_camera = g.get('framegen_camera', '')
     if fg_scene and not re.fullmatch(r'[0-9a-f]{16}', fg_scene): sys.exit(f'{g.id}: framegen_scene must be one full 16-digit shader key')
@@ -209,6 +212,8 @@ def header(g):
          f'#define DM_GAME_ASPECT_NATIVE {int(an == "on")}',
          f'#define DM_GAME_ASPECT_UI {q(au)}',
          f'#define DM_GAME_ASPECT_CANVAS {q(ac)}',
+         f'#define DM_GAME_SCENE_UPSCALE_VS {q(scene[0] if scene else "")}',
+         f'#define DM_GAME_SCENE_UPSCALE_PS {q(scene[1] if scene else "")}',
          f'#define DM_GAME_FRAMEGEN_SCENE {q(fg_scene)}',
          f'#define DM_GAME_FRAMEGEN_CAMERA {q(fg_camera)}',
          f'#define DM_GAME_CAMERA_ASPECT {q(ca)}',

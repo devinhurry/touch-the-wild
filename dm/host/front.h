@@ -41,15 +41,20 @@ void dm_host_preload_start(int argc, char **argv);
 
 // Native display (hle_aspect.c): the game view fills the screen instead of a centred 16:9 picture; the host stretches the 16:9 canvas and squeezes UI draws.
 int dm_aspect_native(void);
+void dm_aspect_set_seated(float picture_end, float controls_begin);
+int dm_aspect_region(int controls, float rect[4]);
 void dm_aspect_set_display(float ratio);
 void dm_aspect_touch_rect(float w, float h, float rect[4]);
 void dm_aspect_hud_rect(float w, float h, float rect[4]);
-void dm_aspect_set_safe_area(float w, float h, float left, float right);
+void dm_aspect_set_safe_area(float w, float h, float left, float top, float right);
+float dm_aspect_hud_y_scale(void);
+float dm_aspect_hud_gain(void);
+float dm_aspect_hud_top(void);
 
 // Publish the virtual 3D-pad target used by BOTW's gameplay HUD. The centre is
 // normalized to the centered 16:9 touch rectangle (top-left origin). Other
 // profiles ignore this state. May be called from the UI thread.
-void dm_botw_touch_hud_publish(int active, float center_x, float center_y);
+void dm_botw_touch_hud_publish(int active, float center_x, float center_y, float dpad_scale);
 void dm_botw_touch_hud_map_tapped(void);   // consume the published host hit region until native panes are calculated again
 int dm_botw_touch_hud_available(void);
 // Minimap bounds use the safe-area-aware HUD rectangle, unlike the centered D-pad.

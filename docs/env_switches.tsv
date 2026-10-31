@@ -40,6 +40,41 @@ DM_BOTW_PAD_ZL_Y	player	BOTW touch shield stick vertical offset as a fraction of
 DM_BOTW_PAD_ZR_SCALE	player	BOTW touch ZR button size multiplier.
 DM_BOTW_PAD_ZR_X	player	BOTW touch ZR button horizontal offset as a fraction of layout canvas width.
 DM_BOTW_PAD_ZR_Y	player	BOTW touch ZR button vertical offset as a fraction of layout canvas height.
+DM_BOTW_PORTRAIT	player	Allow BOTW portrait rotation; tall control panes below 600pt usable width select compact controls. Off by default.
+DM_BOTW_PORTRAIT_MOVE_CURVE	player	BOTW compact touch movement response exponent; default 0.30, launcher range 0.30 to 2.00.
+DM_BOTW_PORTRAIT_MOVE_DEADZONE	player	BOTW compact touch movement deadzone as a radius fraction; default 0.07.
+DM_BOTW_PORTRAIT_MOVE_FULL	player	BOTW compact touch finger travel for full stick strength, as a radius fraction; default 0.71.
+DM_BOTW_PORTRAIT_MOVE_SIZE	player	BOTW compact touch movement stick size multiplier, including its drag range; default 0.80.
+DM_BOTW_PORTRAIT_PAD_A_SCALE	player	BOTW compact A size multiplier; default 1.100.
+DM_BOTW_PORTRAIT_PAD_A_X	player	BOTW compact A horizontal offset as a fraction of screen width.
+DM_BOTW_PORTRAIT_PAD_A_Y	player	BOTW compact A vertical offset as a fraction of screen height.
+DM_BOTW_PORTRAIT_PAD_BADGES	player	BOTW compact touch action-button corner labels; 0 hides them (default), 1 shows them.
+DM_BOTW_PORTRAIT_PAD_B_SCALE	player	BOTW compact B size multiplier; default 1.100.
+DM_BOTW_PORTRAIT_PAD_B_X	player	BOTW compact B horizontal offset as a fraction of screen width.
+DM_BOTW_PORTRAIT_PAD_B_Y	player	BOTW compact B vertical offset as a fraction of screen height.
+DM_BOTW_PORTRAIT_PAD_DPAD_SCALE	player	BOTW compact touch D-pad group size multiplier.
+DM_BOTW_PORTRAIT_PAD_DPAD_X	player	BOTW compact touch D-pad group horizontal offset as a fraction of control pane width.
+DM_BOTW_PORTRAIT_PAD_DPAD_Y	player	BOTW compact touch D-pad group vertical offset as a fraction of control pane height.
+DM_BOTW_PORTRAIT_PAD_L_SCALE	player	BOTW compact touch L button size multiplier.
+DM_BOTW_PORTRAIT_PAD_L_X	player	BOTW compact touch L button horizontal offset as a fraction of control pane width.
+DM_BOTW_PORTRAIT_PAD_L_Y	player	BOTW compact touch L button vertical offset as a fraction of control pane height.
+DM_BOTW_PORTRAIT_PAD_R_SCALE	player	BOTW compact touch R button size multiplier.
+DM_BOTW_PORTRAIT_PAD_R_X	player	BOTW compact touch R button horizontal offset as a fraction of control pane width.
+DM_BOTW_PORTRAIT_PAD_R_Y	player	BOTW compact touch R button vertical offset as a fraction of control pane height.
+DM_BOTW_PORTRAIT_PAD_STICK_X	player	BOTW compact touch movement stick horizontal offset as a fraction of control pane width.
+DM_BOTW_PORTRAIT_PAD_STICK_Y	player	BOTW compact touch movement stick vertical offset as a fraction of control pane height.
+DM_BOTW_PORTRAIT_PAD_X_SCALE	player	BOTW compact X size multiplier; default 1.100.
+DM_BOTW_PORTRAIT_PAD_X_X	player	BOTW compact X horizontal offset as a fraction of screen width.
+DM_BOTW_PORTRAIT_PAD_X_Y	player	BOTW compact X vertical offset as a fraction of screen height.
+DM_BOTW_PORTRAIT_PAD_Y_SCALE	player	BOTW compact Y size multiplier; default 1.100, with a default diameter 10pt larger than X (A/B are 10pt smaller than X).
+DM_BOTW_PORTRAIT_PAD_Y_X	player	BOTW compact Y horizontal offset as a fraction of screen width.
+DM_BOTW_PORTRAIT_PAD_Y_Y	player	BOTW compact Y vertical offset as a fraction of screen height.
+DM_BOTW_PORTRAIT_PAD_ZL_SCALE	player	BOTW compact touch shield stick size multiplier.
+DM_BOTW_PORTRAIT_PAD_ZL_X	player	BOTW compact touch shield stick horizontal offset as a fraction of control pane width.
+DM_BOTW_PORTRAIT_PAD_ZL_Y	player	BOTW compact touch shield stick vertical offset as a fraction of control pane height.
+DM_BOTW_PORTRAIT_PAD_ZR_SCALE	player	BOTW compact touch ZR button size multiplier.
+DM_BOTW_PORTRAIT_PAD_ZR_X	player	BOTW compact touch ZR button horizontal offset as a fraction of control pane width.
+DM_BOTW_PORTRAIT_PAD_ZR_Y	player	BOTW compact touch ZR button vertical offset as a fraction of control pane height.
 DM_BOTW_UI_AUDIT	diagnostic	Append passive BOTW native screen and touch-target evidence as JSONL to this file (exact supported build, touch mode only).
 DM_BUNDLE_ID	switch	Overrides the iOS app's bundle ID in `build_ipa.sh` (default `org.nxnative.<title ID in lowercase>`)
 DM_COPY_GAME_RESOURCES	switch	`NO` skips the Xcode build phase that copies the game's resources into the app (`stage_resources.sh`, on by default); `build_ipa.sh` sets it for its unsigned build, which packs them itself
@@ -50,14 +85,17 @@ DM_DBG_AU_FRAMES	diagnostic	`=<frames>` asks the Mac's Core Audio output for tha
 DM_DETCLOCK	switch	`=<step ns>`: from the first present on, the guest clock advances a fixed step per present instead of following the wall clock, and the random source becomes a fixed-seed stream (replay and test runs)
 DM_DETCLOCK_PACE	switch	`=1` with `DM_DETCLOCK`: each frame takes at least one clock step of wall time, so background loading keeps up with the fixed clock (used by the screenshot gate)
 DM_DISPLAY_NAME	switch	Overrides the iOS app's name in `build_ipa.sh` (default the game name in the base NSP's control data)
-DM_DYNAMIC_RESOLUTION	player	`1` lets NieR:Automata 1.0.3's own dynamic resolution scale between 70 and 100 %, `0` (default) keeps full resolution; only on the builds whose patches.py names the DYNAMIC_RESOLUTION capability (`hle_fpslock.c` `k_nier_dr`). The launcher's Dynamic resolution
+DM_DYNAMIC_RESOLUTION	player	`1` enables the verified native resolution controller: NieR:Automata 1.0.3 uses 70–100%; BOTW 1.9.0 retargets its native 80–100% controller to the effective 30/60 fps cap. Default `0` retains each game's existing policy; a fixed DM_RENDER_SCALE takes precedence in BOTW
 DM_ENTITLEMENTS	path	`=<plist>` gives a prepared Xcode project another entitlements file instead of the Increased Memory Limit one, and the ad-hoc signature of the unsigned IPA's executable carries them; empty means no entitlements
 DM_ENV_FILE	path	`=<file>` makes `build_ipa.sh` bake its `KEY=VALUE` lines into the app as `dm/env.txt`, applied at boot; `Documents/env.txt` overrides them
 DM_ENV_FILE_KEYS	switch	Set by the iOS app and the Mac launcher at launch to the space-separated names an env file set; the settings screen keeps those values and shows them greyed out
 DM_ENV_LAUNCH_KEYS	switch	Set at launch by the Mac launcher (the launcher settings already in the environment) and the iOS app (every DM_* variable already in it) to the space-separated names; the settings screen keeps those values and shows them greyed out
 DM_EXEFS	path	Extracted executable modules directory used by the Mac run script.
 DM_FD_LOG	diagnostic	`=<seconds>` logs, every that many seconds, the number and kinds of file descriptors the process has open
+DM_FILE_HEAP	path	Directory for the experimental file-backed guest heap; active only with DM_LOW_MEMORY=1, whose preset sets this to DM_TEMP. Backing files are unlinked while their mappings remain alive
 DM_FIXED_TIME	switch	`=<seconds>`: the user clock always returns that time and the host time zone is pinned to UTC, for deterministic comparison
+DM_FIXTURE_IMPORT_FILE	test	Path imported by the synthetic iOS game-file startup fixture.
+DM_FIXTURE_PREPARE_MISSING	test	Exercise missing game files before import in the synthetic iOS startup fixture.
 DM_FONT_DIR	path	Folder of the shared-font stand-ins (`standard.ttf`, `nintendo_ext.ttf` with the button icons); the app, the Mac launcher and the NSP script set it
 DM_FORCE_STRICT	diagnostic	`=1` makes the loader fail on forced-hook entries no module references, instead of only noting them (for checking a mistyped list)
 DM_FPS	switch	`30` or `60` pins the frame rate the display link and frame pacing aim for; otherwise it follows the game's present interval (60, or 30 when the game asks for 30)
@@ -70,7 +108,6 @@ DM_FULLSCREEN	player	`1` (any value but `0`) starts the Mac window in fullscreen
 DM_GAME	switch	Selects the game profile (a title ID under `dm/games` or `DM_GAMES_DIR`) for the Python tools and the rewriter; there is no default
 DM_GAMES_DIR	path	Profile folders outside the repository, separated by `:`, searched after `dm/games`; the NSP script points it at a provisional or derived profile
 DM_GAMES_FIRST	switch	`=1` searches `DM_GAMES_DIR` before `dm/games`, so a provisional or derived profile wins over the game's own (the NSP script's `--provisional`)
-DM_GAME_DATA_OUT	path	Output .nxrom game-data package for a separate-ROM iOS build.
 DM_GAME_ENV	switch	`KEY=VALUE` pairs, separated by spaces, that the game's own `getenv` returns, in place of the profile's `game_env` (`hle_os.c`); any other name goes to the SDK's empty environment
 DM_GFX_FIXTURE_OUT	test	`=<dir>`: graphics tests write their raw result textures and buffers there
 DM_GLSLC_CAPTURE	path	`=<dir>` saves every GLSLC output the game compiles at run time; `shader_split.py` reads it (default `<version dir>/glslc_capture`)
@@ -98,6 +135,7 @@ DM_LOADHASH	diagnostic	`=1` logs an address-independent SHA-256 per module after
 DM_LONGFRAME	diagnostic	`0` turns off the long-frame log (on by default), a line for a frame over 20 ms or with GPU time over 16.7 ms that is clearly above recent frames
 DM_LOOK	switch	Enable the BOTW relative touch-camera adapter; 0 keeps ordinary right-stick handling.
 DM_LOOK_TRACE	diagnostic	Log relative camera input selection and consumption.
+DM_LOW_MEMORY	player	Experimental master memory preset: 1 enables a file-backed guest heap and transient texture upload sources and skips whole-game pipeline prebuild; 0 keeps ordinary behavior. The launcher detects a default below 4.5 GiB available headroom and preserves explicit choices
 DM_MEASURE_LOCK	path	`=<file>`: `scripts/regress.py`'s default `--lock`, the measuring lock `scripts/bench.py --lock` shares: held only while a game runs, and the harness's shader builds pause while another process holds it
 DM_MEMSTAT	diagnostic	`=<tsv>` writes one line per second of memory accounting: footprint, Metal allocation and resident and charged memory by region class (guest, code, malloc, gpu, …)
 DM_MEMSTAT_DUMP	diagnostic	`=<seconds>`: with `DM_MEMSTAT`, at that second writes every VM region of 1 MiB or more to `<tsv>.regions`
@@ -188,6 +226,7 @@ DM_NVN_TEXDUMP	diagnostic	`=<frame>:<path>`, `size=<W>x<H>:<path>` or `layers=<n
 DM_NVN_TEXINFO	diagnostic	`=<W>x<H>` logs storage and description of every texture of that size on first use, registration and initialization (pool, flags, packaged, non-zero bytes, swizzles)
 DM_NVN_TEXRAW	diagnostic	`=<serial>,…` or `info` (the textures `DM_NVN_TEXINFO` picked out): saves those textures' raw bytes at the `DM_NVN_TEXDUMP` frame, with a text header line
 DM_NVN_TEXSNAP	diagnostic	`=<in-frame pass index>,…`: with `DM_NVN_TEXDUMP`, copies those passes' colour attachments as they end and saves them with the end-of-frame dump
+DM_NVN_TRANSIENT_UPLOADS	switch	1 uses temporary GPU views of texture-upload sources, retained until their last in-flight batch completes; requires DM_LOW_MEMORY=1, whose preset enables it
 DM_NVN_TREG_ID	diagnostic	`=<n>` logs every registration of texture ID n: what it holds from then on, and the frame being recorded
 DM_NVN_TSV	diagnostic	`=<path>` writes the per-frame NVN call table and timing rows (frame, metric, value) to a TSV, read by `scripts/bench.py`
 DM_NVN_TSV_CALLS	diagnostic	`0` makes `DM_NVN_TSV` write only the timing rows, without the call counts (about two thirds of the file)
@@ -231,7 +270,7 @@ DM_PRESENT_INTERVAL	switch	`display` presents one frame per display-link tick wh
 DM_PRESENT_LATENCY	switch	`=<n>` (above 0): the display link's preferred frame latency in a window and in fullscreen (default 1 in a window, 2 in fullscreen)
 DM_PRESENT_LINK	switch	Present pacing: `0` acquires the drawable itself, `1` (the default) presents on a 60 Hz display link, `2` uses a 120 Hz display link with a frame every other tick
 DM_PRESENT_SNAP	player	`=<n>`: present snapshots, a ring of n host textures (2 to 4; `1` = 2) the presents are copied to so the game's swapchain texture is free at once; `0` off (default: the profile's `present_snap`)
-DM_PRESENT_UPSCALE	player	`metalfx` scales a picture smaller than its rectangle on the screen through MetalFX's spatial scaler; `off` (the default) scales it bilinearly
+DM_PRESENT_UPSCALE	player	`off` (default) keeps standard scaling; `scene` scales only the verified 3D scene before the HUD; `metalfx` scales the final picture, including text and UI. One mutually exclusive launcher choice: Upscaling
 DM_PROBE	diagnostic	`=module:offset,…` (Mac only): puts a `brk` at each guest address and on every hit prints the thread, registers, strings they point to and a backtrace, then runs the original instruction
 DM_PROBE_ALL	diagnostic	Set: probe hits (`DM_PROBE`) also print x9–x18
 DM_PROBE_DUMP	diagnostic	`=module:offset:length[:file]`: on the first hit of any probe, writes that range of guest memory to a file (default `run/<platform>/probe_dump.bin`)
@@ -268,6 +307,7 @@ DM_QOS_MAP	switch	`=1` maps guest thread priority to QoS class: ≤ 44 user-inte
 DM_REC	diagnostic	`=<file>`: writes player 1's physical input (keyboard, mouse touches, controllers; never `DM_KEYS` / `DM_CTL`) to the file as `DM_KEYS` steps in presented frames, for replaying a run (`DM_KEYS=@<file>`)
 DM_REGIONS	diagnostic	`=<file>` writes the table of the SDK's address regions every 2 s (alias offset, size, where the request returns to in the game, bytes mapped, the part opened, the SDK offset the request came through; `hle_svc.c` "Address regions"); the NSP script's address region check sets it
 DM_RENDER_SCALE	player	`0.5` to `1.0`: fixes the game's 3D views at that fraction of their size and turns its dynamic resolution off, for builds with a render scale stub; `1.0` (the default) keeps it
+DM_REPOSITORY	switch	Build-time owner/repo for the About source link; defaults to GITHUB_REPOSITORY, then the local GitHub origin
 DM_RESOURCE_AOC	path	The add-on content folder the iOS build copies into the app's `aoc/` (empty for none); written by `gen_resources.py`, read by `stage_resources.sh`
 DM_RESOURCE_BUILD	switch	Package version (for example `v327680`), written to `Gen/resources.env` by `gen_resources.py`; with `DM_COPY_ROMFS=NO` the copy phase puts it in the `build=` field of the app's `romfs.id`
 DM_RESOURCE_CHAIN_H	path	Path of `dm/gfx/nvn/dmsh_chain.h`, written to `Gen/resources.env` by `build_ipa.sh`; the Xcode copy phase (`stage_resources.sh`) stops when the prepared shaders are not of its chain version
@@ -275,7 +315,6 @@ DM_RESOURCE_MARKER	path	A file under the RomFS, written to `Gen/resources.env` b
 DM_RESOURCE_MSLDIR	path	Name of the shader library folder (`b-<chain>`), written to `Gen/resources.env` by `build_ipa.sh`; the Xcode copy phase copies the shaders to `msl/<name>` in the app
 DM_RESOURCE_PSO	path	Folder of the offline Metal pipeline archive (empty for none), written to `Gen/resources.env` by `build_ipa.sh`; the Xcode copy phase copies it to `<App>/pso`
 DM_RESOURCE_ROMFS	path	RomFS folder, written to `Gen/resources.env` by `build_ipa.sh`; the Xcode copy phase (`stage_resources.sh`) copies it into the app's `romfs`
-DM_RESOURCE_SEPARATE_ROM	switch	Generated Xcode resource phase flag: 1 stages an external game-data descriptor instead of bundled game files.
 DM_RESOURCE_SHADERS	path	iOS shader library folder, written to `Gen/resources.env` by `build_ipa.sh`; the Xcode copy phase (`stage_resources.sh`) copies it into the app's `msl/b-<chain>`
 DM_RESOURCE_TITLE	switch	Game profile title ID, written to `Gen/resources.env` by `gen_resources.py`; with `DM_COPY_ROMFS=NO` the copy phase puts it in the `title=` field of the app's `romfs.id`
 DM_RESOURCE_VERSION	switch	Display version, written to `Gen/resources.env` by `gen_resources.py`; with `DM_COPY_ROMFS=NO` the copy phase puts it in the `version=` field of the app's `romfs.id`
@@ -294,7 +333,6 @@ DM_SAVED_CHOICES	switch	`0` ignores the player's saved choices (launcher.<VAR> i
 DM_SAVE_SYNC	player	Cloud saves: the folder whose `<title ID>/save.dmsync` the save is synced through, `icloud` for iCloud Drive/nxnative Saves (the Mac); `0` or unset, off. The Mac launcher sets the folder chosen in its settings window's Cloud saves, the iPhone app the one picked in its launcher (dm/host/save_sync.h)
 DM_SCHEME_NAME	switch	Set by `build_ipa.sh` itself for xcodegen's `project.yml`: the Xcode scheme name, `DmIOS`, or `<display name> (<title ID>)` for a project prepared with `--prepare-xcode`
 DM_SCREEN_MATCH	switch	`0` keeps the screen's refresh rate in fullscreen; by default a Mac screen whose rate is not a multiple of the game's frame rate switches to one that is (144 → 120 Hz)
-DM_SEPARATE_ROM	switch	Package iOS game files in a separate .nxrom for in-app import; default 0.
 DM_SF_TRACE	diagnostic	`=1` logs every request on the game's own HIPC client sessions that the host answers (`hle_sf.c`)
 DM_SHAKE_G	switch	`=<G>`: on iOS, the acceleration beyond gravity above which a flick of the phone shakes the controller's six-axis sensor (default 1.5)
 DM_SHARED_FONT	path	Font file served for every shared-font type except the Nintendo extension (default `$DM_FONT_DIR/standard.ttf`, then macOS's Arial Unicode)
@@ -312,6 +350,7 @@ DM_TEMP	path	Temporary storage folder (default `$DM_ROOT/run/platform/temp`); st
 DM_TEST_ARCHIVE_CONSTANTS	test	Use optional function constants in the synthetic pipeline archive restart fixture
 DM_TEST_ARCHIVE_MIXED	test	Mix a newly compiled shader function with compacted bases in the archive restart fixture
 DM_TEST_BORDER	test	Path to the native t_border executable that test_dmsh_border.py runs a rewritten shader through on the GPU (`make check_t_border` sets it)
+DM_TEST_BOTW_SEATED	test	Simulate a horizontal fold in the BOTW Mac preview, with the picture above and controls below; 1 enables it.
 DM_TEST_BUILD	test	Build folder of `dm/host/tests` whose `t_svc_memory` `test_memory_profile.py` runs (default `build`; `make asan` sets `build/asan`)
 DM_TEST_FS_FAIL	diagnostic	`=write:<n>[:<errno>]` makes the nth save write fail with that errno (default ENOSPC), which refuses the save transaction's commit
 DM_TEST_FS_FAILAT	diagnostic	`=<point>[:<count>][,…]` makes steps of the save transaction (`mountclone`, `reclone`, `guestname`, `renameback`) fail with ENOSPC

@@ -11,14 +11,9 @@ APP="${TARGET_BUILD_DIR:?}/${UNLOCALIZED_RESOURCES_FOLDER_PATH:?}"
 case "$APP" in /*.app) ;; *) die "Unexpected app resource destination: $APP";; esac
 # Validate every source before copying or removing anything (the external drive may be disconnected).
 resource_dm=$(python3 -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve().parents[2])' "$0")
-if [ "$DM_RESOURCE_SEPARATE_ROM" = 0 ]; then
-    python3 "$resource_dm/tools/romfs.py" "$DM_RESOURCE_ROMFS" "$DM_RESOURCE_MARKER" || die "Game files unavailable: $DM_RESOURCE_ROMFS/$DM_RESOURCE_MARKER"
-    [ -z "$DM_RESOURCE_AOC" ] || [ -d "$DM_RESOURCE_AOC" ] || die "Add-on content unavailable: $DM_RESOURCE_AOC"
-elif [ "$DM_RESOURCE_SEPARATE_ROM" != 1 ]; then die 'DM_RESOURCE_SEPARATE_ROM must be 0 or 1'; fi
+python3 "$resource_dm/tools/romfs.py" "$DM_RESOURCE_ROMFS" "$DM_RESOURCE_MARKER" || die "Game files unavailable: $DM_RESOURCE_ROMFS/$DM_RESOURCE_MARKER"
+[ -z "$DM_RESOURCE_AOC" ] || [ -d "$DM_RESOURCE_AOC" ] || die "Add-on content unavailable: $DM_RESOURCE_AOC"
 [ -d "$SRCROOT/Gen/dm" ] || die 'Missing generated game tables; prepare the game again.'
-if [ "$DM_RESOURCE_SEPARATE_ROM" = 1 ]; then
-    [ -f "$SRCROOT/Gen/dm/game-data.json" ] || die 'Missing external game-data descriptor; prepare the game again.'
-fi
 [ -d "$DM_RESOURCE_SHADERS" ] || die "Shader libraries unavailable: $DM_RESOURCE_SHADERS"
 DM_RESOURCE_PSO=${DM_RESOURCE_PSO:-}   # (a project prepared before the pipeline archive has none)
 [ -z "$DM_RESOURCE_PSO" ] || [ -f "$DM_RESOURCE_PSO/prebuilt.tsv" ] || die "Pipeline archive unavailable: $DM_RESOURCE_PSO"
@@ -28,33 +23,36 @@ case "$DM_RESOURCE_MSLDIR" in b-*)
     V=$(sed -n 's/^#define DMSH_CHAIN "\(.*\)"/\1/p' "$DM_RESOURCE_CHAIN_H")
     [ "$DM_RESOURCE_MSLDIR" = "b-$V" ] || die "The prepared shaders are chain $DM_RESOURCE_MSLDIR, the sources are now at b-$V: prepare the game again (build_ipa_from_nsp.py --prepare-xcode)";;
 esac
-echo 'Copy game resources (the first build copies the complete game; later builds sync changes)'
+if [ "${DM_COPY_ROMFS:-YES}" = NO ] && [ -n "$DM_RESOURCE_AOC" ]; then
+    mkdir -p "$SRCROOT/Gen/game-data"
+    python3 "$resource_dm/tools/game_image.py" --reuse "$DM_RESOURCE_ROMFS" "$DM_RESOURCE_AOC" "$SRCROOT/Gen/game-data/RomFS.img" || die 'Combine game files and DLC'
+    DM_RESOURCE_ROMFS=$SRCROOT/Gen/game-data/RomFS.img; DM_RESOURCE_AOC=
+fi
+echo 'Synchronize game resources (DM_COPY_ROMFS=NO keeps game data and DLC external)'
 mkdir -p "$APP/msl/$DM_RESOURCE_MSLDIR"
 mkdir -p "$APP/dm"
-# Remove stale descriptors when switching a prepared project back to a bundled build.
+# Keep generated tables synchronized with the current build.
 /usr/bin/rsync -a --delete -- "$SRCROOT/Gen/dm/" "$APP/dm/"
-# DM_COPY_ROMFS=NO: the game files stay out of the app (main.m takes Documents/romfs first, copied there once): a reinstall then sends the code and shaders, not the whole game
-if [ "$DM_RESOURCE_SEPARATE_ROM" = 1 ]; then
-    rm -rf "$APP/romfs" "$APP/romfs.img" "$APP/romfs.id" "$APP/aoc"
-elif [ "${DM_COPY_ROMFS:-YES}" = NO ]; then
-    rm -rf "$APP/romfs" "$APP/romfs.img" "$APP/romfs.id"
+# DM_COPY_ROMFS=NO: base game and DLC stay in one external image, read directly from Documents/romfs.img.
+if [ "${DM_COPY_ROMFS:-YES}" = NO ]; then
+    rm -rf "$APP/romfs" "$APP/romfs.img" "$APP/romfs.id" "$APP/romfs.base.id"
     # the image's identity (dm/host/romfs_identity.h): main.m uses only a Documents/romfs.img that matches it; a RomFS folder has none yet (push_romfs.sh packs it), so no identity is written for it
     if [ -f "$DM_RESOURCE_ROMFS" ]; then
-        python3 -I "$resource_dm/tools/romfs_image.py" --identity "$DM_RESOURCE_ROMFS" "${DM_RESOURCE_TITLE:-}" "${DM_RESOURCE_VERSION:-}" "${DM_RESOURCE_BUILD:-}" > "$APP/romfs.id" || die "identity of $DM_RESOURCE_ROMFS"
+        python3 -I "$resource_dm/tools/game_image.py" --identities "$DM_RESOURCE_ROMFS" "$APP" "${DM_RESOURCE_TITLE:-}" "${DM_RESOURCE_VERSION:-}" "${DM_RESOURCE_BUILD:-}" || die "identity of $DM_RESOURCE_ROMFS"
     fi
 elif [ -f "$DM_RESOURCE_ROMFS" ]; then
     /usr/bin/rsync -a -- "$DM_RESOURCE_ROMFS" "$APP/romfs.img"
-    rm -rf "$APP/romfs"; rm -f "$APP/romfs.id"
+    rm -rf "$APP/romfs"; rm -f "$APP/romfs.id" "$APP/romfs.base.id"
 else
     mkdir -p "$APP/romfs"; /usr/bin/rsync -a --delete -- "$DM_RESOURCE_ROMFS/" "$APP/romfs/"
-    rm -f "$APP/romfs.img" "$APP/romfs.id"
+    rm -f "$APP/romfs.img" "$APP/romfs.id" "$APP/romfs.base.id"
 fi
 # Analysis MSL is an external cache/prefill input, not a runtime resource; remove old copies only from this shader folder.
 /usr/bin/rsync -a --delete --delete-excluded --exclude '*.metal' -- "$DM_RESOURCE_SHADERS/" "$APP/msl/$DM_RESOURCE_MSLDIR/"
 for old in "$APP/msl/"*; do
     [ "$old" = "$APP/msl/$DM_RESOURCE_MSLDIR" ] || rm -rf "$old"
 done
-if [ "$DM_RESOURCE_SEPARATE_ROM" = 0 ] && [ -n "$DM_RESOURCE_AOC" ]; then
+if [ "${DM_COPY_ROMFS:-YES}" != NO ] && [ -n "$DM_RESOURCE_AOC" ]; then
     mkdir -p "$APP/aoc"
     /usr/bin/rsync -a --delete -- "$DM_RESOURCE_AOC/" "$APP/aoc/"
 else

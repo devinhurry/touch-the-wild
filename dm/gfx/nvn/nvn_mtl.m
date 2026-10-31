@@ -37,12 +37,19 @@ static int framegen_present_active(void);
 #include "game_profile.h"   // game profile constants (profile id, the profile's switches)
 int dm_aspect_native(void); float dm_aspect_ratio(void); float dm_aspect_custom_ratio(void);   // hle_aspect.c
 float dm_aspect_hud_offset(int right);
+int dm_aspect_region(int controls, float rect[4]);
+float dm_aspect_control_ratio(void); float dm_aspect_map_gain(void);
 #ifndef NVN_ASPECT_HOST
 // Standalone graphics tests have no host; real hosts link the strong implementations in hle_aspect.c.
 __attribute__((weak)) int dm_aspect_native(void) { return 0; }
 __attribute__((weak)) float dm_aspect_ratio(void) { return 0; }
 __attribute__((weak)) float dm_aspect_hud_offset(int right) { (void)right; return 0; }
 __attribute__((weak)) float dm_aspect_custom_ratio(void) { return 0; }
+__attribute__((weak)) int dm_aspect_region(int controls, float rect[4]) { (void)controls; rect[0]=rect[1]=0; rect[2]=rect[3]=1; return 0; }
+__attribute__((weak)) float dm_aspect_control_ratio(void) { return dm_aspect_ratio(); }
+__attribute__((weak)) float dm_aspect_map_gain(void) { return 1; }
+__attribute__((weak)) float dm_aspect_hud_gain(void) { return 1; }
+__attribute__((weak)) float dm_aspect_hud_y_scale(void) { return 1; }
 #endif
 // Texture slot table per stage: 0-127 the combined handles (nvnCommandBufferBindTexture), 128-255 the separate texture binds (NVN_SEPTEX_SLOT0, nvn_obj.h)
 #define NTEX 256
@@ -3782,7 +3789,7 @@ static void shmap_load(void) {
     int gs_loc, lay_loc; char gs_comp, lay_comp;   // a slice-writing geometry shader (no function: the layer comes from input gs_loc.gs_comp) / a vertex shader with layer entry points writing output lay_loc.lay_comp (dmsh_build.py gs_slice, vs_layer_entry); -1 = none
     // The argument buffer encoded last time
     id<MTLBuffer> ab_buf; uint64_t ab_gpu; size_t ab_off; uint64_t ab_pass; uint32_t ab_binst; uint64_t ab_pgen;   // ab_pass: serial of the render pass that encoded this argument block - reused only within the same pass (the arena holding a block from another pass / another submission may already have been reclaimed and rewritten); ab_pgen: g_psnap_gen when it was encoded (pools, pool_gpu)
-    double ab_ui_clip_x, ab_ui_clip_bias; // projection correction belongs to the cached vertex argument block
+    double ab_ui_clip_x, ab_ui_clip_bias, ab_ui_clip_y, ab_ui_clip_bias_y; // projection correction belongs to the cached vertex argument block
     id<MTLLibrary> bflib; int bflib_tried; NSMutableDictionary<NSString *, id<MTLFunction>> *bffn;   // bflib: readable-tile version <key>_bf (merge B step 2)
     uint64_t mis[4];   // mis: texture slots 0-255 already reported for a type mismatch (tex_mis_note)
     NSString *ventry; id<MTLFunction> vfn; int vfn_state;
@@ -7056,11 +7063,19 @@ static void ubo_read(int stage, int reg, int off, size_t n, void *out) {
 }
 static uint32_t ubo_handle(int stage, int reg, int off) { uint32_t h; ubo_read(stage, reg, off, 4, &h); return h; }
 // BOTW's registered ui2d shaders use c3[0..3] for the clip matrix and c13.x
-// for the clip-x offset (NVN UBO slots 0 and 10). Correct clip x before clipping, keeping a full-sized
-// viewport: a narrowed viewport also clips native full-bleed backgrounds.
+// for the clip-x offset (NVN UBO slots 0 and 10). Correct clip coordinates before
+// clipping, keeping a full-sized viewport: a narrowed viewport also clips native
+// full-bleed backgrounds and the relocated weather component on narrow screens.
 static double g_ui_clip_x = 1, g_ui_clip_bias;
+static double g_ui_clip_y = 1, g_ui_clip_bias_y;
 static double g_ui_copy_x = 1, g_ui_copy_bias;
 static int g_ui_layout_draw;
+static tex_t g_ui_dock_tex;
+static id<MTLTexture> g_ui_dock_image;
+static uint64_t g_ui_dock_frame=~0ull;
+static int g_ui_dock_draw, g_ui_dock_copy;
+static __weak id<MTL4RenderCommandEncoder> g_ui_dock_encoder;
+static void seated_dock_finish(void) { if (g_enc && g_enc==g_ui_dock_encoder) rp_end(); }
 static struct {
     uint64_t frame, canvas;
     float rect[4];
@@ -7069,7 +7084,7 @@ static struct {
 // The native framebuffer-copy shader expresses its UV center as cb5.zw
 // times cb6.xy. Map blur reads back a clipped piece of the UI canvas, so its
 // sampling rectangle must follow the same affine as the map already drawn.
-static int ui_capture_projection(float *cb, const float rect[4], double x, double bias) {
+static int ui_capture_bounds(const float *cb,const float rect[4]) {
     float c = cosf(cb[26]), s = sinf(cb[26]);
     float cx = .5f + (cb[22]*c-cb[23]*s)*cb[24];
     float cy = .5f + (cb[22]*s+cb[23]*c)*cb[25];
@@ -7077,28 +7092,40 @@ static int ui_capture_projection(float *cb, const float rect[4], double x, doubl
     float ry = .5f*(fabsf(c)+fabsf(s))*fabsf(cb[25]);
     const float pixel = 1.f/720;
     if (!isfinite(cx) || !isfinite(cy) || !isfinite(rx) || !isfinite(ry) ||
-        cb[24] == 0 || x <= 0 || x == 1 ||
+        cb[24] == 0 ||
         cx-rx < rect[0]-pixel || cx+rx > rect[2]+pixel ||
         cy-ry < rect[1]-pixel || cy+ry > rect[3]+pixel) return 0;
-    double delta = bias/(2*cb[24]*x);
-    cb[22] += delta*c; cb[23] -= delta*s; cb[24] *= x;
+    return 1;
+}
+static int ui_capture_projection(float *cb,const float rect[4],double x,double bias) {
+    if (x<=0 || x==1 || !ui_capture_bounds(cb,rect)) return 0;
+    float c=cosf(cb[26]),s=sinf(cb[26]);
+    double delta=bias/(2*cb[24]*x);
+    cb[22]+=delta*c; cb[23]-=delta*s; cb[24]*=x;
     return 1;
 }
 static void ui_projection_copy(int reg, const float *source, float *out, size_t size) {
     if (out != source) memcpy(out, source, size);
     if (reg == 0 && size >= 112 && g_ui_copy_x != 1)
         ui_capture_projection(out, g_ui_map_capture.rect, g_ui_copy_x, g_ui_copy_bias);
-    else if (reg == 0 && size >= 64)
-        for (int i = 0; i < 4; i++) out[i] = source[i] * g_ui_clip_x + source[12 + i] * g_ui_clip_bias;
-    else if (reg == 10 && size >= 4) out[0] = source[0] * g_ui_clip_x;
+    else if (reg == 0 && size >= 64) {
+        if (g_ui_clip_x != 1 || g_ui_clip_bias != 0)
+            for (int i = 0; i < 4; i++) out[i] = source[i] * g_ui_clip_x + source[12 + i] * g_ui_clip_bias;
+        if (g_ui_clip_y != 1 || g_ui_clip_bias_y != 0)
+            for (int i = 0; i < 4; i++) out[4+i] = source[4+i] * g_ui_clip_y + source[12+i] * g_ui_clip_bias_y;
+    } else if (reg == 10 && size >= 4) {
+        out[0] = source[0] * g_ui_clip_x;
+    }
 }
 static void ui_scissor_x(long *x0, long *x1, long width, double squeeze, int projection, int scope) {
     // Native ui2d clamps scissor edges to its 16:9 target before calling NVN.
     // Edge-anchored HUD can cross either edge independently. Preserve those
     // open edges; partial interior clips still follow the corrected projection.
-    int left_open = projection && *x0 <= 0 && (scope == NVN_UI_HUD || (scope == NVN_UI_BACKGROUND && *x1 >= width));
-    int right_open = projection && *x1 >= width && (scope == NVN_UI_HUD || (scope == NVN_UI_BACKGROUND && *x0 <= 0));
-    double shift = projection && scope == NVN_UI_MAP ? width * dm_aspect_hud_offset(1) / (1280.0 * squeeze) : 0;
+    int hud=scope==NVN_UI_HUD || scope==NVN_UI_DOCK_ENV || scope==NVN_UI_DOCK_EQUIPMENT;
+    int left_open = projection && *x0 <= 0 && (hud || (scope == NVN_UI_BACKGROUND && *x1 >= width));
+    int right_open = projection && *x1 >= width && (hud || (scope == NVN_UI_BACKGROUND && *x0 <= 0));
+    float region[4];
+    double shift = projection && scope == NVN_UI_MAP && !dm_aspect_region(1,region) ? width * dm_aspect_hud_offset(1) / (1280.0 * squeeze) : 0;
     *x0 = left_open ? 0 : (long)floor(width / 2.0 + (*x0 - width / 2.0) / squeeze + shift);
     *x1 = right_open ? width : (long)ceil(width / 2.0 + (*x1 - width / 2.0) / squeeze + shift);
 }
@@ -7109,18 +7136,22 @@ static uint32_t g_dispatch_dim[3];   // the current dispatch's workgroup counts 
 static uint32_t g_draw_binst;   // the current draw's base instance (draw), for c0 + 0x644
 static __unsafe_unretained id<MTLBuffer> g_c0_dim_buf; static size_t g_c0_dim_off;   // where encode_args put them for this dispatch (nil: the shader reads no c0); an indirect dispatch copies its GPU-written counts there
 static uint64_t g_geo_bind[5];
+static struct { __strong id<MTLTexture> source, output; } g_scene_up;
+static void scene_upscale_prepare(NvProg *pr, const p_draw *dw, const p_draw_idx *di);
 static int encode_args_(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, int metal_vertex);
 static int encode_args(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, int metal_vertex) { AP_B; int r = encode_args_(en, sh, nvn_stage, metal_vertex); AP_E(3); return r; }
 static int encode_args_(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, int metal_vertex) {
-    double ui_key_x = g_ui_copy_x != 1 ? g_ui_copy_x : g_ui_clip_x;
-    double ui_key_bias = g_ui_copy_x != 1 ? g_ui_copy_bias : g_ui_clip_bias;
+    int ui_copy=g_ui_copy_x != 1;
+    double ui_key_x = ui_copy ? g_ui_copy_x : g_ui_clip_x;
+    double ui_key_bias = ui_copy ? g_ui_copy_bias : g_ui_clip_bias;
     if (nvn_stage == 1 && !metal_vertex && sh->has_alpha && atest_on()) at_bind(en);   // also for a shader without bindings
     if (nvn_stage == 1 && !metal_vertex && sh->has_logic && lop_on()) lo_bind(en);
     if (!sh->ae) return 1;
     args_sync_dirty();
     if (!passdump() && !g_args_dirty[nvn_stage] && sh->ab_buf && sh->ab_pass == g_pass.serial && nvn_stage != 5 &&
         !(sh->rf.drv_read[0] && sh->ab_binst != g_draw_binst) && !(sh->rf.pool && sh->ab_pgen != g_psnap_gen) &&
-        (nvn_stage != 0 || (sh->ab_ui_clip_x == ui_key_x && sh->ab_ui_clip_bias == ui_key_bias))) {
+        (nvn_stage != 0 || (sh->ab_ui_clip_x == ui_key_x && sh->ab_ui_clip_bias == ui_key_bias &&
+         sh->ab_ui_clip_y == g_ui_clip_y && sh->ab_ui_clip_bias_y == g_ui_clip_bias_y))) {
         bind_args(en, nvn_stage, metal_vertex, sh->ab_buf, sh->ab_gpu, sh->ab_off, sh->rf.abi);
         g_stat_args_reuse++;
         return 1;
@@ -7159,7 +7190,8 @@ static int encode_args_(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, i
                     FILE *f = fopen(p, "wb"); if (f) { fwrite((const void *)u->addr, 1, u->size, f); fclose(f); } else RED_ONCE(41, "CBDUMP cannot write %s", p);
                 }
             }
-            if (nvn_stage == 0 && (g_ui_clip_x != 1 || g_ui_clip_bias != 0 || g_ui_copy_x != 1) && (reg == 0 || reg == 10)) {
+            if (nvn_stage == 0 && (g_ui_clip_x != 1 || g_ui_clip_bias != 0 || g_ui_clip_y != 1 ||
+                g_ui_clip_bias_y != 0 || ui_copy) && (reg == 0 || reg == 10)) {
                 // Read the replay-time uniform snapshot, including queued inline
                 // updates. Keep the guest buffer and the shader libraries intact.
                 id<MTLBuffer> corrected; size_t off = arena_alloc((size_t)ul, &corrected);
@@ -7207,6 +7239,8 @@ static int encode_args_(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, i
             int tid = b->kind == NVN_RB_TEXU ? ubo_tex_id(ubo_handle(nvn_stage, reg, b->off)) : (int)(tex_slot_h(S.tex[nvn_stage], S.img[nvn_stage], reg) & 0xfffff);
             void *tv = NULL; uint64_t trid = tid ? tex_fast_rid(tid, &tv) : 0; __unsafe_unretained id<MTLTexture> t = (__bridge id<MTLTexture>)tv;
             if (t && g_fb_n && g_fb_seq == g_draw_seq && nvn_stage == 1) for (int q = 0; q < g_fb_n; q++) if (t == g_fb_src[q]) { t = g_fb_use[q]; trid = g_fb_rid[q]; break; }   // same-pass feedback sampling: read the snapshot instead (see fb_prepare)
+            if (nvn_stage == 1 && reg == 0 && g_scene_up.output && t == g_scene_up.source) { t = g_scene_up.output; trid = t.gpuResourceID._impl; }
+            if (nvn_stage==1 && reg==0 && g_ui_dock_copy && g_ui_dock_image) { t=g_ui_dock_image; trid=t.gpuResourceID._impl; }
             if (t && passdump() && tid < g_ntreg) PD("R %llu st%d ser=%llu", g_stat_pass, nvn_stage, g_treg[tid].t.serial);
             if (bl) PD("B %llu st%d tex reg%d tid=%d %s ser=%llu fmt=%lu %lux%lux%lu view_lv=%lu+%lu view_sl=%lu array=%lu target=%lu swz=%d%d%d%d mtl=%p", g_stat_pass, nvn_stage, reg, tid, t ? "real" : "dummy", t && tid < g_ntreg ? g_treg[tid].t.serial : 0ull,
                        (unsigned long)t.pixelFormat, (unsigned long)t.width, (unsigned long)t.height, (unsigned long)t.depth,
@@ -7386,6 +7420,7 @@ static int encode_args_(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, i
     bind_args(en, nvn_stage, metal_vertex, ab, g_cur_arena->gpu + off, off, sh->rf.abi);
     sh->ab_buf = ab; sh->ab_gpu = g_cur_arena->gpu + off; sh->ab_off = off; sh->ab_pass = g_pass.serial; sh->ab_binst = g_draw_binst; sh->ab_pgen = g_psnap_gen; g_args_dirty[nvn_stage] = 0;
     sh->ab_ui_clip_x = ui_key_x; sh->ab_ui_clip_bias = ui_key_bias;
+    sh->ab_ui_clip_y = g_ui_clip_y; sh->ab_ui_clip_bias_y = g_ui_clip_bias_y;
     g_stat_args_enc++;
     return 1;
 }
@@ -9455,6 +9490,16 @@ static int lc_keeps(uint32_t op) {
 // Transform font/layout draws at the final UI canvas. Offscreen captures keep their original
 // coordinates; sampled GPU screen pictures already carry screen coordinates. The profile identifies font/layout shaders.
 static uint64_t g_ui_tex;
+static float g_ui_region[4]={0,0,1,1};
+static int ui_dock_scope(int scope) {
+    return scope==NVN_UI_MAP || scope==NVN_UI_WEATHER || scope==NVN_UI_DOCK_ENV ||
+        scope==NVN_UI_DOCK_EQUIPMENT || scope==NVN_UI_RUNE;
+}
+static void ui_region_to_render(float region[4]) {
+    if (atomic_load_explicit(&g_origin_ll,memory_order_relaxed)) region[1]=1-region[1]-region[3];
+}
+static void seated_dock_prepare(const tex_t *canvas);
+static void seated_dock_composite(void);
 static _Atomic uint64_t g_rune_source_serial;
 static uint64_t g_rune_last_capture_frame;
 static _Atomic int g_rune_capture_pending;
@@ -9467,6 +9512,7 @@ static void ui_aspect_scale(double *ux, double *uy) {
 }
 static int ui_squeeze_scale(NvProg *pr, double *ux, double *uy, int scope) {
     g_ui_layout_draw = 0;
+    g_ui_region[0]=g_ui_region[1]=0; g_ui_region[2]=g_ui_region[3]=1;
     *ux = *uy = 1;
     // Identify the canvas only at its final composite draw.
     int canvas_shader = pr->sh[1] && *DM_GAME_ASPECT_CANVAS && !strncmp(pr->sh[1]->key, DM_GAME_ASPECT_CANVAS, 16);
@@ -9484,13 +9530,29 @@ static int ui_squeeze_scale(NvProg *pr, double *ux, double *uy, int scope) {
     }
     if (!dm_aspect_native() || R.rt.n <= 0 || !R.rt.color[0]) return 0;
     if (xv_present(R.rt.color[0]->serial)) {
+        if (!strcmp(DM_GAME_ID,"01007EF00011E000") && dm_aspect_region(0,g_ui_region))
+            ui_region_to_render(g_ui_region);
         return 0;
     }
-    if (!g_ui_tex || R.rt.color[0]->serial != g_ui_tex || !pr->sh[0]) return 0;
+    if ((!g_ui_dock_draw && (!g_ui_tex || R.rt.color[0]->serial != g_ui_tex)) || !pr->sh[0]) return 0;
     char key[17]; memcpy(key, pr->sh[0]->key, 16); key[16] = 0;
     int layout = strstr(DM_GAME_ASPECT_UI, key) != NULL;
     if (!layout) return 0;
     g_ui_layout_draw = !strcmp(DM_GAME_ID, "01007EF00011E000");
+    int dock=ui_dock_scope(scope);
+    float region[4]; int seated=g_ui_layout_draw && dm_aspect_region(1,region);
+    double aspect=seated && dock ? dm_aspect_control_ratio() : dm_aspect_ratio();
+    if (g_ui_layout_draw && scope == NVN_UI_WEATHER) {
+        double gain=seated ? dm_aspect_map_gain() : dm_aspect_hud_gain();
+        *ux=fmax(1,aspect/(16.0f/9.0f))/gain; *uy=1/(dm_aspect_hud_y_scale()*gain);
+        return 1;
+    }
+    // Narrow-display HUD containers apply their native vertical scale before
+    // Calculate, keeping geometry, scissors and capture coordinates together.
+    // Rune capture overrides the ancestor HUD tag, but shares its transform.
+    if (g_ui_layout_draw && aspect < 16.0f/9.0f &&
+        (scope == NVN_UI_HUD || scope == NVN_UI_MAP || scope == NVN_UI_RUNE ||
+         scope==NVN_UI_DOCK_ENV || scope==NVN_UI_DOCK_EQUIPMENT)) return 0;
     // A projected fullscreen fill must retain its native clip/texture matrices
     // together. The final canvas stretch extends both, without exposing the
     // animated texture's far edge on ultrawide displays.
@@ -9505,7 +9567,10 @@ static int ui_squeeze_scale(NvProg *pr, double *ux, double *uy, int scope) {
         tex_mtl(t);
         if (mtl_tex_gpu_owned(t->serial) && scope != NVN_UI_BACKGROUND) return 0;
     }
-    ui_aspect_scale(ux, uy);
+    if (seated && dock) {
+        double f=aspect/(16.0f/9.0f);
+        if (f>1) *ux=f; else if (f>0 && f<1) *uy=1/f;
+    } else ui_aspect_scale(ux, uy);
     return *ux != 1 || *uy != 1;
 }
 
@@ -9709,10 +9774,35 @@ void mtl_geohoist_stats(uint64_t *moved, uint64_t *runs, uint64_t *stops) { *mov
 void mtl_cshoist_stats(uint64_t *moved, uint64_t *depth, uint64_t *stops) { *moved = g_csh_moved; *depth = g_csh_depth; for (int i = 0; i < 8; i++) stops[i] = g_csh_stop[i]; }
 static void draw_(const p_draw *dw, const p_draw_idx *di);
 #include "framegen_capture.inc"
-static void draw(const p_draw *dw, const p_draw_idx *di) { cp_stamp start = cp_begin(); draw_(dw, di); cp_end(5, start); }
+static void draw(const p_draw *dw, const p_draw_idx *di) {
+    cp_stamp start=cp_begin(); float region[4];
+    int seated=!strcmp(DM_GAME_ID,"01007EF00011E000") && dm_aspect_region(1,region);
+    int scope=dw ? dw->pad : di ? di->pad : 0;
+    int dock=seated && R.rt.n>0 && R.rt.color[0] && R.rt.color[0]->serial==g_ui_tex && ui_dock_scope(scope);
+    NvProg *pr=S.prog ? prog_get(S.prog) : nil;
+    int composite=seated && R.rt.n>0 && R.rt.color[0] && xv_present(R.rt.color[0]->serial) &&
+        pr && pr->sh[1] && *DM_GAME_ASPECT_CANVAS && !strncmp(pr->sh[1]->key,DM_GAME_ASPECT_CANVAS,16);
+    if (dock) {
+        // Route native dock draws once, preserving the game's original canvas
+        // and its cached menu/character pictures in their native coordinates.
+        seated_dock_prepare(R.rt.color[0]); __typeof__(R) saved=R;
+        R.rt=(p_set_rt){.n=1,.color={&g_ui_dock_tex}}; R.has_rt=1;
+        g_ui_dock_draw=1; draw_(dw,di); g_ui_dock_encoder=g_enc; g_ui_dock_draw=0; R=saved;
+    } else {
+        seated_dock_finish();
+        if (composite) {
+            rp_flush(); R.clear_c[0]=1; R.cc[0]=MTLClearColorMake(0,0,0,1);
+        }
+        draw_(dw,di);
+        if (composite && g_ui_dock_frame==atomic_load(&g_cur_frame)) seated_dock_composite();
+    }
+    cp_end(5,start);
+}
 static void draw_(const p_draw *dw, const p_draw_idx *di) {
-    g_ui_clip_x = 1; g_ui_clip_bias = 0;
+    if (g_scene_up.output) { g_scene_up.source = g_scene_up.output = nil; g_args_dirty[1] = 1; }
+    g_ui_clip_x = g_ui_clip_y = 1; g_ui_clip_bias = g_ui_clip_bias_y = 0;
     g_ui_copy_x = 1; g_ui_copy_bias = 0;
+    if (g_ui_dock_copy) { g_ui_dock_copy=0; g_args_dirty[1]=1; }
     g_draw_binst = (uint32_t)(dw ? dw->base_instance : di ? di->base_instance : 0);   // c0 + 0x644 of the stages that read the driver segment (encode_args)
     if (passdump()) { NvProg *p = g_geo_program ? g_geo_program : S.prog ? prog_get(S.prog) : nil;
         PD("j %llu draw-entry vs=%s fs=%s gs=%s prim=%d count=%d instances=%d indexed=%d indirect=%#llx discard=%d feedback=%d", g_stat_pass + !g_enc,
@@ -9784,6 +9874,7 @@ static void draw_(const p_draw *dw, const p_draw_idx *di) {
         static int once3; if (!once3++) MLOG("readable-tile pass merge: a draw of the later pass is not provable; back to separate passes (first case pass %llu)", g_stat_pass);
         g_fz_fallback++; rp_end(); }
     fb_prepare(pr);   // same-pass feedback sampling: copy the snapshot first (see fb_prepare)
+    scene_upscale_prepare(pr, dw, di);
     // Resolving a newly sampled picture can upload it or end the current pass. Do this before opening/binding the encoder.
     double sux = 1, suy = 1; int ui_scope = dw ? dw->pad : di ? di->pad : 0;
     int sq = ui_squeeze_scale(pr, &sux, &suy, ui_scope);
@@ -9794,6 +9885,10 @@ static void draw_(const p_draw *dw, const p_draw_idx *di) {
         if (tid > 0 && tid < g_ntreg && g_treg[tid].ok &&
             g_treg[tid].t.serial == g_ui_map_capture.canvas) {
             float cb[28]; ubo_read(0, 0, 0, sizeof cb, cb);
+            float region[4];
+            if (dm_aspect_region(1,region) && g_ui_dock_image && ui_capture_bounds(cb,g_ui_map_capture.rect)) {
+                g_ui_dock_copy=1; g_args_dirty[1]=1;
+            }
             if (ui_capture_projection(cb, g_ui_map_capture.rect, g_ui_map_capture.x, g_ui_map_capture.bias)) {
                 g_ui_copy_x = g_ui_map_capture.x; g_ui_copy_bias = g_ui_map_capture.bias;
                 g_args_dirty[0] = 1;
@@ -9865,43 +9960,53 @@ static void draw_(const p_draw *dw, const p_draw_idx *di) {
       if (!(g_ed.ok & ED_SREF) || g_ed.sref != sr) { enc_r_stencil_ref(en, sr, sr); g_ed.sref = sr; g_ed.ok |= ED_SREF; } }
     // Viewport / scissor (clamped within the target size)
     NSUInteger tw = g_pass.tw, th = g_pass.th;
-    int ui_projection = g_ui_layout_draw && sq && sux > 1;
+    int ui_projection = g_ui_layout_draw && sq && (sux > 1 || ui_scope == NVN_UI_WEATHER);
+    int ui_projection_y = g_ui_layout_draw && sq && ui_scope == NVN_UI_WEATHER;
     g_ui_clip_x = ui_projection ? 1 / sux : 1; g_ui_clip_bias = 0;
-    if (ui_projection && ui_scope == NVN_UI_MAP && R.has_sc &&
+    g_ui_clip_y = ui_projection_y ? 1 / suy : 1; g_ui_clip_bias_y = 0;
+    int ui_region=g_ui_region[0]!=0 || g_ui_region[1]!=0 || g_ui_region[2]!=1 || g_ui_region[3]!=1;
+    if ((ui_projection || g_ui_dock_draw) && ui_scope == NVN_UI_MAP && R.has_sc &&
         R.sc.w > 0 && R.sc.h > 0 && (R.sc.w < tw || R.sc.h < th)) {
         g_ui_map_capture.frame = atomic_load(&g_cur_frame);
-        g_ui_map_capture.canvas = R.rt.color[0]->serial;
+        g_ui_map_capture.canvas = g_ui_dock_draw ? g_ui_tex : R.rt.color[0]->serial;
         g_ui_map_capture.rect[0] = fmaxf(0, (float)R.sc.x/tw);
         g_ui_map_capture.rect[1] = fmaxf(0, (float)R.sc.y/th);
         g_ui_map_capture.rect[2] = fminf(1, (float)(R.sc.x+R.sc.w)/tw);
         g_ui_map_capture.rect[3] = fminf(1, (float)(R.sc.y+R.sc.h)/th);
         g_ui_map_capture.x = 1/sux;
-        g_ui_map_capture.bias = dm_aspect_hud_offset(1)/(640*sux);
+        g_ui_map_capture.bias = g_ui_dock_draw ? 0 : dm_aspect_hud_offset(1)/(640*sux);
     }
     // A corrected bank is a value snapshot, whereas an ordinary argument block
     // points at the game's live uniforms. Refresh the snapshot for every draw.
-    if (ui_projection) g_args_dirty[0] = 1;
+    if (ui_projection || ui_projection_y) g_args_dirty[0] = 1;
     { MTLViewport v = S.has_vp ? (MTLViewport){S.vp[0][0], S.vp[0][1], S.vp[0][2], S.vp[0][3], S.dr[0], S.dr[1]} : (MTLViewport){0, 0, tw, th, 0, 1};
       if (ui_projection && v.width > 0) g_ui_clip_bias = (tw - 2 * v.originX - v.width) * (1 - g_ui_clip_x) / v.width;
-      if (ui_projection && ui_scope == NVN_UI_MAP && v.width > 0)
+      if (ui_projection && ui_scope == NVN_UI_MAP && v.width > 0 && !g_ui_dock_draw)
           g_ui_clip_bias += dm_aspect_hud_offset(1) / (640.0 * sux) * tw / v.width;
-      if (sq) { if (!ui_projection) { v.originX = tw / 2.0 + (v.originX - tw / 2.0) / sux; v.width /= sux; } v.originY = th / 2.0 + (v.originY - th / 2.0) / suy; v.height /= suy; }
+      if (sq) { if (!ui_projection) { v.originX = tw / 2.0 + (v.originX - tw / 2.0) / sux; v.width /= sux; }
+          if (!ui_projection_y) { v.originY = th / 2.0 + (v.originY - th / 2.0) / suy; v.height /= suy; } }
       if (atomic_load_explicit(&g_origin_ll, memory_order_relaxed)) { v.originY += v.height; v.height = -v.height; }   // lower-left origin (see g_origin_ll)
       // Viewport swizzle: NEGATIVE_Y negates clip y, the same as the viewport flipped about its centre; facing is decided after it on the GPU as in Metal, so the winding stays.
       // Other swizzles (axis exchanges, negated x / z / w) are no viewport change and are drawn unswizzled
       { uint32_t sw; memcpy(&sw, S.vp_sw[0], 4);
         if (sw == 0x100) { v.originY += v.height; v.height = -v.height; }
         else if (sw) RED_ONCE(108, "viewport swizzle %d,%d,%d,%d not implemented (drawn unswizzled)", S.vp_sw[0][0], S.vp_sw[0][1] ^ 2, S.vp_sw[0][2] ^ 4, S.vp_sw[0][3] ^ 6); }
+      if (ui_projection_y && v.height != 0) g_ui_clip_bias_y = (2 * v.originY + v.height - th) * (1 - g_ui_clip_y) / v.height;
+      v.originX=tw*g_ui_region[0]+v.originX*g_ui_region[2]; v.width*=g_ui_region[2];
+      v.originY=th*g_ui_region[1]+v.originY*g_ui_region[3]; v.height*=g_ui_region[3];
       if (!(g_ed.ok & ED_VP) || memcmp(&g_ed.vp, &v, sizeof v)) { enc_r_viewport(en, v); g_ed.vp = v; g_ed.ok |= ED_VP; } }
     MTLScissorRect sc = {0, 0, tw, th};
-    if (R.has_sc && !S.rast_discard) {   // raster state cannot suppress vertex storage writes
-        long x0 = R.sc.x < 0 ? 0 : R.sc.x, y0 = R.sc.y <= 0 ? 0 : R.sc.y, x1 = (long)R.sc.x + R.sc.w, y1 = (long)R.sc.y + R.sc.h;
+    if ((R.has_sc || ui_region) && !S.rast_discard) {   // raster state cannot suppress vertex storage writes
+        long x0=0,y0=0,x1=tw,y1=th;
+        if (R.has_sc) { x0=R.sc.x < 0 ? 0 : R.sc.x; y0=R.sc.y <= 0 ? 0 : R.sc.y; x1=(long)R.sc.x+R.sc.w; y1=(long)R.sc.y+R.sc.h; }
         if (x1 > (long)tw) x1 = tw; if (y1 > (long)th) y1 = th;
         if (sq) {
             ui_scissor_x(&x0, &x1, (long)tw, sux, ui_projection, ui_scope);
-            y0 = (long)floor(th / 2.0 + (y0 - th / 2.0) / suy); y1 = (long)ceil(th / 2.0 + (y1 - th / 2.0) / suy);
+            ui_scissor_x(&y0, &y1, (long)th, suy, ui_projection_y, NVN_UI_HUD);
             if (x0 < 0) x0 = 0; if (y0 < 0) y0 = 0; if (x1 > (long)tw) x1 = tw; if (y1 > (long)th) y1 = th;
         }
+        x0=floor(tw*g_ui_region[0]+x0*g_ui_region[2]); x1=ceil(tw*g_ui_region[0]+x1*g_ui_region[2]);
+        y0=floor(th*g_ui_region[1]+y0*g_ui_region[3]); y1=ceil(th*g_ui_region[1]+y1*g_ui_region[3]);
         if (x1 <= x0 || y1 <= y0) { PD("Z %llu draw skipped: empty scissor (%d,%d %dx%d, target %lux%lu)", g_stat_pass, R.sc.x, R.sc.y, R.sc.w, R.sc.h, (unsigned long)tw, (unsigned long)th); return; }
         sc = (MTLScissorRect){(NSUInteger)x0, (NSUInteger)y0, (NSUInteger)(x1 - x0), (NSUInteger)(y1 - y0)};
     }
@@ -11018,6 +11123,7 @@ void mtl_exec(const uint8_t *p) {
                 PD("Y update_ub cmd=%p src=%#llx dst=%#llx bytes=%llu f=%g,%g,%g,%g", p, (unsigned long long)((const uint8_t *)a + 16), (unsigned long long)d, (unsigned long long)n,
                    n >= 4 ? ((const float *)((const uint8_t *)a + 16))[0] : 0.f, n >= 8 ? ((const float *)((const uint8_t *)a + 16))[1] : 0.f, n >= 12 ? ((const float *)((const uint8_t *)a + 16))[2] : 0.f, n >= 16 ? ((const float *)((const uint8_t *)a + 16))[3] : 0.f); mtl_sub_update((const uint8_t *)a + 16, d, n); break; }
             case OP_SET_RT: {
+                seated_dock_finish();
                 const p_set_rt *r = a;
                 if (defer_begin_q(p)) break;
                 int pend = R.clear_d || R.clear_s; for (int i = 0; i < 8; i++) pend |= R.clear_c[i];
@@ -11034,6 +11140,7 @@ void mtl_exec(const uint8_t *p) {
                 sub_cut(); R.rt = *r; R.has_rt = 1; break;
             }
             case OP_CLEAR_COLOR: {
+                seated_dock_finish();
                 const p_clear_color *c = a;
                 if (g_rc_skip) { PD("c %llu color clear skipped by conditional rendering slot%d", g_stat_pass, c->index); break; }
                 // A scissored clear to 0 outside a pass with all channels (SMBW clears pyramid levels as sub-rectangles of 480×272 and other targets): copy from the zero buffer into the scissor rectangle in the replay stream
@@ -11051,6 +11158,7 @@ void mtl_exec(const uint8_t *p) {
                 break;
             }
             case OP_CLEAR_DS: {
+                seated_dock_finish();
                 const p_clear_ds *c = a;
                 if (g_rc_skip) { PD("c %llu depth-stencil clear skipped by conditional rendering", g_stat_pass); break; }
                 if (g_rt_merged || g_sm_pass) rp_end();
@@ -11445,8 +11553,7 @@ int mtl_display_hz(void) {
 static _Atomic uint64_t g_present_stall_ns;   // For unit tests: an extra pause before each present on the present thread (simulating a drawable that stays unavailable)
 static CAMetalLayer *g_present_layer_resident;
 void mtl_present_test_stall(uint64_t ns) { g_present_stall_ns = ns; }
-static void present_pipeline(MTLPixelFormat format) {
-    if (!g_blit_pso || g_blit_fmt != format) {
+static id<MTLRenderPipelineState> texture_blit_pipeline(MTLPixelFormat format,int alpha) {
         static const char *src_msl =
             "#include <metal_stdlib>\nusing namespace metal;\n"
             "struct V { float4 p [[position]]; float2 uv; };\n"
@@ -11459,12 +11566,94 @@ static void present_pipeline(MTLPixelFormat format) {
         MTLRenderPipelineDescriptor *pd = [MTLRenderPipelineDescriptor new];
         pd.vertexFunction = [lib newFunctionWithName:@"vs"]; pd.fragmentFunction = [lib newFunctionWithName:@"fs"];
         pd.colorAttachments[0].pixelFormat = format;
-        g_blit_pso = [g_dev newRenderPipelineStateWithDescriptor:pd error:&e];
-        if (!g_blit_pso) MDIE("present pipeline failed %s", e.localizedDescription.UTF8String);
-        g_blit_fmt = format;
+        if (alpha) {
+            pd.colorAttachments[0].blendingEnabled=YES;
+            pd.colorAttachments[0].sourceRGBBlendFactor=pd.colorAttachments[0].sourceAlphaBlendFactor=MTLBlendFactorOne;
+            pd.colorAttachments[0].destinationRGBBlendFactor=pd.colorAttachments[0].destinationAlphaBlendFactor=MTLBlendFactorOneMinusSourceAlpha;
+        }
+        id<MTLRenderPipelineState> ps = [g_dev newRenderPipelineStateWithDescriptor:pd error:&e];
+        if (!ps) MDIE("texture blit pipeline failed %s", e.localizedDescription.UTF8String);
+        return ps;
+}
+static id<MTLSamplerState> texture_blit_sampler(void) {
         MTLSamplerDescriptor *sd = [MTLSamplerDescriptor new]; sd.minFilter = sd.magFilter = MTLSamplerMinMagFilterLinear; sd.supportArgumentBuffers = YES;
-        g_blit_samp = [g_dev newSamplerStateWithDescriptor:sd];
+        return [g_dev newSamplerStateWithDescriptor:sd];
+}
+static void present_pipeline(MTLPixelFormat format) {
+    if (!g_blit_pso || g_blit_fmt != format) {
+        g_blit_pso=texture_blit_pipeline(format,0); g_blit_fmt=format;
+        g_blit_samp=texture_blit_sampler();
     }
+}
+// Dock draws use a separate transparent target. Keep every game-owned canvas
+// native, so cached menus and 3D UI never accumulate a second region transform.
+// Composite the dock on the final swapchain before its ordinary snapshot/present.
+static void seated_dock_encode(id<MTL4CommandBuffer> cb,id<MTLTexture> source,id<MTLTexture> target,
+                               const float region[4],MTLGPUAddress constants) {
+    static id<MTLRenderPipelineState> ps; static MTLPixelFormat format;
+    static id<MTLSamplerState> sampler; static id<MTL4ArgumentTable> table;
+    if (!ps || format!=target.pixelFormat) {
+        if (ps) defer_obj_unref(ps);
+        ps=texture_blit_pipeline(target.pixelFormat,1); format=target.pixelFormat;
+    }
+    if (!table) {
+        NSError *e=nil; MTL4ArgumentTableDescriptor *ad=[MTL4ArgumentTableDescriptor new];
+        ad.maxTextureBindCount=ad.maxSamplerStateBindCount=ad.maxBufferBindCount=1;
+        table=rec_table([g_dev newArgumentTableWithDescriptor:ad error:&e]);
+        if (!table) MDIE("Seated dock has no argument table: %s",e.localizedDescription.UTF8String);
+        sampler=texture_blit_sampler();
+    }
+    MTL4RenderPassDescriptor *rp=[MTL4RenderPassDescriptor new];
+    rp.colorAttachments[0].texture=target; rp.colorAttachments[0].loadAction=MTLLoadActionLoad;
+    rp.colorAttachments[0].storeAction=MTLStoreActionStore;
+    id<MTL4RenderCommandEncoder> en=[cb renderCommandEncoderWithDescriptor:rp];
+    if (!en) MDIE("Seated dock has no render encoder");
+    [en barrierAfterQueueStages:MTLStageAll beforeStages:MTLStageAll visibilityOptions:resource_vis()];
+    [en setArgumentTable:table atStages:MTLRenderStageFragment];
+    [table setTexture:source.gpuResourceID atIndex:0]; [table setSamplerState:sampler.gpuResourceID atIndex:0];
+    [table setAddress:constants atIndex:0];
+    [en setViewport:(MTLViewport){target.width*region[0],target.height*region[1],target.width*region[2],target.height*region[3],0,1}];
+    [en setRenderPipelineState:ps]; [en drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+    m4_end(en);
+}
+static void seated_dock_prepare(const tex_t *canvas) {
+    id<MTLTexture> original=tex_mtl(canvas);
+    if (g_ui_dock_frame==atomic_load(&g_cur_frame) && g_enc && g_enc==g_ui_dock_encoder &&
+        g_ui_dock_image.width==original.width && g_ui_dock_image.height==original.height) return;
+    rp_flush(); ubd_land_compute(); if (g_blit) { enc_b_end(g_blit); g_blit=nil; } up_flush();
+    if (!g_ui_dock_image || g_ui_dock_image.width!=original.width || g_ui_dock_image.height!=original.height) {
+        MTLTextureDescriptor *d=[MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA16Float width:original.width height:original.height mipmapped:NO];
+        d.storageMode=MTLStorageModePrivate; d.usage=MTLTextureUsageShaderRead|MTLTextureUsageRenderTarget;
+        id<MTLTexture> image=[g_dev newTextureWithDescriptor:d]; if (!image) MDIE("Seated dock allocation failed");
+        g_ui_dock_tex=(tex_t){.magic=MAGIC('T','E','X',0),.serial=(1ull<<60)+1};
+        g_ui_dock_tex.d.width=original.width; g_ui_dock_tex.d.height=original.height;
+        g_ui_dock_tex.d.depth=g_ui_dock_tex.d.levels=1;
+        g_ui_dock_tex.d.target=NVN_TEXTURE_TARGET_2D; g_ui_dock_tex.d.format=NVN_FORMAT_RGBA16F;
+        serial_put(g_ui_dock_tex.serial,image); res_add(image); g_ui_dock_image=image;
+        g_ui_dock_frame=~0ull;
+    }
+    uint64_t frame=atomic_load(&g_cur_frame);
+    if (g_ui_dock_frame!=frame) {
+        res_commit(); MTL4RenderPassDescriptor *rp=[MTL4RenderPassDescriptor new];
+        rp.colorAttachments[0].texture=g_ui_dock_image; rp.colorAttachments[0].loadAction=MTLLoadActionClear;
+        rp.colorAttachments[0].storeAction=MTLStoreActionStore; rp.colorAttachments[0].clearColor=MTLClearColorMake(0,0,0,0);
+        id<MTL4RenderCommandEncoder> en=[g_cb renderCommandEncoderWithDescriptor:rp];
+        if (!en) MDIE("Seated dock cannot clear its target");
+        [en barrierAfterQueueStages:MTLStageAll beforeStages:MTLStageAll visibilityOptions:resource_vis()]; m4_end(en);
+        g_ui_dock_frame=frame;
+    }
+}
+static void seated_dock_composite(void) {
+    float region[4]; if (!g_ui_dock_image || !dm_aspect_region(1,region)) return;
+    rp_flush(); ubd_land_compute(); if (g_blit) { enc_b_end(g_blit); g_blit=nil; } up_flush();
+    // Respect the game's render-target view, especially its sRGB conversion.
+    MTLRenderPassColorAttachmentDescriptor *attachment=[MTLRenderPassColorAttachmentDescriptor new];
+    attach(attachment,R.rt.color[0],&R.rt.cview[0],R.rt.has_cview[0]);
+    id<MTLBuffer> buffer; size_t offset=arena_alloc(32,&buffer); float *uv=(float *)((uint8_t *)buffer.contents+offset);
+    float w=g_ui_dock_image.width,h=g_ui_dock_image.height;
+    const float values[8]={0,0,1,1,.5f/w,.5f/h,1-.5f/w,1-.5f/h}; memcpy(uv,values,sizeof values);
+    ui_region_to_render(region); res_commit();
+    seated_dock_encode(g_cb,g_ui_dock_image,attachment.texture,region,buffer.gpuAddress+offset);
 }
 // Present samples only the valid source rectangle declared by NVN; kept separate from the raw swapchain readback screenshot. Edges are clamped to the texel centers of the valid area, so bilinear does not read the black texels outside.
 // Present samples the raw bytes stored in the swapchain texture (the Switch's scan-out sends the stored bytes as they are): an sRGB source is replaced by a non-sRGB view of the same storage,
@@ -11515,7 +11704,7 @@ static int present_encode(id<MTLCommandBuffer> cb, id<MTLTexture> src, id<MTLTex
     double dw = dst.width, dh = dst.height;
     MTLViewport vp = present_viewport(cw, ch, dw, dh);
     if (dm_aspect_native()) {
-        float cr = dm_aspect_custom_ratio();
+        float region[4],cr = dm_aspect_region(1,region) ? 0 : dm_aspect_custom_ratio();
         if (cr > 0) { double w = fmin(dw, dh * cr), h = w / cr; vp = (MTLViewport){floor((dw - w) / 2), floor((dh - h) / 2), round(w), round(h), 0, 1}; }
         else vp = (MTLViewport){0, 0, dw, dh, 0, 1};   // native display: the camera holds the wide view, the canvas is stretched (UI squeezed in draw)
     }
@@ -11542,19 +11731,22 @@ static int present_encode(id<MTLCommandBuffer> cb, id<MTLTexture> src, id<MTLTex
 // bytes), then draw 1:1 with the usual origin and output format. Queue barriers serialize both the frame's rendering and reuse of the scaler's textures across presents.
 // Replacing those textures waits for earlier presents; throttle replacement during resizing, and keep standard scaling for refused sizes. Offscreen captures own separate state.
 #define FX_REMAKE_PRESENTS 30
-typedef struct { id<MTL4FXSpatialScaler> sc; id<MTLTexture> in, out; uint64_t made_at; int made; NSUInteger refused[6]; } fx_state;
+typedef struct { id<MTL4FXSpatialScaler> sc; id<MTLTexture> in, out; id<MTL4Compiler> compiler; uint64_t made_at; int made; NSUInteger refused[6]; } fx_state;
 static fx_state g_fx_present;   // only the present thread encodes or replaces the scaler
-static id<MTL4Compiler> g_fx_comp;
-static int g_fx_mode = -1;   // 1 = metalfx, 0 = off
+static _Atomic int g_fx_mode = -1;   // shared by scene replay and presentation; 0 = standard, 1 = full-screen MetalFX, 2 = scene MetalFX
 static int fx_mode(void) {
-    if (g_fx_mode >= 0) return g_fx_mode;
-    const char *e = getenv("DM_PRESENT_UPSCALE"); int v = 0;
+    int v = atomic_load_explicit(&g_fx_mode, memory_order_relaxed);
+    if (v >= 0) return v;
+    const char *e = getenv("DM_PRESENT_UPSCALE"); v = 0;
     if (e && (!strcmp(e, "metalfx") || !strcmp(e, "1"))) v = 1;
+    else if (e && !strcmp(e, "scene")) v = 2;
     else if (e && (!strcmp(e, "off") || !strcmp(e, "0"))) v = 0;
-    else if (e && *e) MLOG("[RED] DM_PRESENT_UPSCALE=%s: metalfx or off; keeping %s", e, v ? "metalfx" : "off");
+    else if (e && *e) MLOG("[RED] DM_PRESENT_UPSCALE=%s: scene, metalfx or off; keeping off", e);
+    if (v == 2 && !*DM_GAME_SCENE_UPSCALE_PS) { MLOG("scene upscaling: unavailable for this profile; keeping standard scaling"); v = 0; }
     if (v && !(g_q4 && [MTLFXSpatialScalerDescriptor supportsMetal4FX:g_dev])) { MLOG("present upscaling: this GPU has no Metal 4 MetalFX spatial scaler; the present scales bilinearly"); v = 0; }
-    MLOG("present upscaling (DM_PRESENT_UPSCALE): %s", v ? "metalfx, MetalFX's spatial scaler where the picture is shown larger than the game renders it" : "off, bilinear");
-    return g_fx_mode = v;
+    MLOG("upscaling (DM_PRESENT_UPSCALE): %s", v == 2 ? "scene, MetalFX before the HUD" : v == 1 ? "metalfx, MetalFX on the final picture" : "off, bilinear");
+    atomic_store_explicit(&g_fx_mode, v, memory_order_relaxed);
+    return v;
 }
 // MetalFX scales the content (cw x ch) to its rectangle on the canvas (vp) when the rectangle is at least as large in both directions and larger in one
 static int fx_wanted(MTLViewport vp, NSUInteger cw, NSUInteger ch) {
@@ -11562,26 +11754,31 @@ static int fx_wanted(MTLViewport vp, NSUInteger cw, NSUInteger ch) {
     return cw && ch && w >= cw && h >= ch && (w > cw || h > ch);
 }
 // Encodes the upscale of the rectangle r of raw into cb (see above); returns the scaled picture, which the present pass draws 1:1 into vp, or nil (the bilinear pass).
-// remake_wait: fx is the present thread's, whose textures presents still on the GPU may read: a new scaler waits for them and for FX_REMAKE_PRESENTS presents since the last
-static id<MTLTexture> fx_encode(fx_state *fx, id<MTL4CommandBuffer> cb, id<MTLTexture> raw, const NSUInteger r[4], MTLViewport vp, MTLPixelFormat out_pf, int remake_wait) {
+// FX_PRESENT waits for outstanding presents and limits resize churn; FX_SCENE
+// retires replaced resources behind the rendering fence without a GPU wait.
+enum { FX_CAPTURE, FX_PRESENT, FX_SCENE };
+static id<MTLTexture> fx_encode(fx_state *fx, id<MTL4CommandBuffer> cb, id<MTLTexture> raw, const NSUInteger r[4], MTLViewport vp, MTLPixelFormat out_pf, int scope) {
     NSUInteger cw = r[2], ch = r[3], ow = (NSUInteger)vp.width, oh = (NSUInteger)vp.height;
-    if (fx_mode() != 1 || !fx_wanted(vp, cw, ch)) return nil;
+    if (!fx_wanted(vp, cw, ch)) return nil;
     if (!fx->sc || fx->in.width != cw || fx->in.height != ch || fx->in.pixelFormat != raw.pixelFormat || fx->out.width != ow || fx->out.height != oh || fx->out.pixelFormat != out_pf) {
         NSUInteger key[6] = {cw, ch, raw.pixelFormat, ow, oh, out_pf};
         if (!memcmp(key, fx->refused, sizeof key)) return nil;
-        if (remake_wait && fx->made && g_present_n < fx->made_at + FX_REMAKE_PRESENTS) return nil;
-        if (remake_wait) { pthread_mutex_lock(&g_pq_mu); while (g_pq_inflight) pthread_cond_wait(&g_pq_cv, &g_pq_mu); pthread_mutex_unlock(&g_pq_mu); }
-        res_remove(fx->in); res_remove(fx->out); fx->sc = nil; fx->in = fx->out = nil;
+        if (scope == FX_PRESENT && fx->made && g_present_n < fx->made_at + FX_REMAKE_PRESENTS) return nil;
+        if (scope == FX_PRESENT) { pthread_mutex_lock(&g_pq_mu); while (g_pq_inflight) pthread_cond_wait(&g_pq_cv, &g_pq_mu); pthread_mutex_unlock(&g_pq_mu); }
+        if (scope == FX_SCENE) {   // old sizes may still be read by an in-flight submission
+            defer_obj_release(fx->in); defer_obj_release(fx->out); defer_obj_unref(fx->sc);
+        } else { res_remove(fx->in); res_remove(fx->out); }
+        fx->sc = nil; fx->in = fx->out = nil;
         uint64_t t0 = now_ns(); NSError *e = nil;
-        if (!g_fx_comp) g_fx_comp = [g_dev newCompilerWithDescriptor:[MTL4CompilerDescriptor new] error:&e];
+        if (!fx->compiler) fx->compiler = [g_dev newCompilerWithDescriptor:[MTL4CompilerDescriptor new] error:&e];
         MTLFXSpatialScalerDescriptor *d = [MTLFXSpatialScalerDescriptor new];
         d.colorTextureFormat = raw.pixelFormat; d.outputTextureFormat = out_pf; d.inputWidth = cw; d.inputHeight = ch; d.outputWidth = ow; d.outputHeight = oh;
         d.colorProcessingMode = MTLFXSpatialScalerColorProcessingModePerceptual;
-        id<MTL4FXSpatialScaler> sc = g_fx_comp ? [d newSpatialScalerWithDevice:g_dev compiler:g_fx_comp] : nil;
-        fx->made_at = g_present_n; fx->made++;
+        id<MTL4FXSpatialScaler> sc = fx->compiler ? [d newSpatialScalerWithDevice:g_dev compiler:fx->compiler] : nil;
+        fx->made_at = scope == FX_PRESENT ? g_present_n : 0; fx->made++;
         if (!sc) { memcpy(fx->refused, key, sizeof key);
             MLOG("present upscaling: MetalFX makes no spatial scaler for %lux%lu format %lu → %lux%lu format %lu%s; this size is scaled bilinearly", (unsigned long)cw, (unsigned long)ch, (unsigned long)raw.pixelFormat,
-                 (unsigned long)ow, (unsigned long)oh, (unsigned long)out_pf, g_fx_comp ? "" : " (no Metal 4 compiler)"); return nil; }
+                 (unsigned long)ow, (unsigned long)oh, (unsigned long)out_pf, fx->compiler ? "" : " (no Metal 4 compiler)"); return nil; }
         MTLTextureDescriptor *td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:raw.pixelFormat width:cw height:ch mipmapped:NO];
         td.storageMode = MTLStorageModePrivate; td.usage = sc.colorTextureUsage | MTLTextureUsageShaderRead;
         id<MTLTexture> in = [g_dev newTextureWithDescriptor:td];
@@ -11600,9 +11797,47 @@ static id<MTLTexture> fx_encode(fx_state *fx, id<MTL4CommandBuffer> cb, id<MTLTe
     [ce copyFromTexture:raw sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(r[0], r[1], 0) sourceSize:MTLSizeMake(cw, ch, 1) toTexture:fx->in destinationSlice:0 destinationLevel:0 destinationOrigin:MTLOriginMake(0, 0, 0)];
     [ce barrierAfterStages:MTLStageBlit beforeQueueStages:MTLStageAll visibilityOptions:resource_vis()];   // the scaler's encoders come after the copy
     [ce endEncoding];
-    fx->sc.colorTexture = fx->in; fx->sc.inputContentWidth = cw; fx->sc.inputContentHeight = ch; fx->sc.outputTexture = fx->out;
-    [fx->sc encodeToCommandBuffer:cb];
+    rec_fx(cb, fx->sc, fx->in, fx->out, cw, ch);
     return fx->out;
+}
+
+// An opt-in at a profile's verified scene-composite pair, before its HUD.
+// Keep the native FXAA draw (including its channel mask / output alpha); only
+// replace its scene input. Its existing vertex constants already describe the
+// output texel grid, which becomes the scaled input's grid as well.
+static void scene_upscale_prepare(NvProg *pr, const p_draw *dw, const p_draw_idx *di) {
+    static fx_state fx;
+    if (fx_mode() != 2 || !g_cb || !pr || !pr->sh[0] || !pr->sh[1] || g_fz.active || g_defer_replaying || g_geo_program ||
+        strncmp(pr->sh[0]->key, DM_GAME_SCENE_UPSCALE_VS, 16) || strncmp(pr->sh[1]->key, DM_GAME_SCENE_UPSCALE_PS, 16)) return;
+    int count = dw ? dw->count : di ? di->count : 0;
+    if (count != 3 || (dw ? dw->ind || dw->instances > 1 : di->ind || di->instances > 1) || R.rt.n != 1 || !R.rt.color[0] || R.rt.depth ||
+        S.ds.dt || S.ds.st || S.rast_discard || S.tf_on || !S.has_vp || S.vp[0][0] || S.vp[0][1]) return;
+    NSUInteger ow = (NSUInteger)S.vp[0][2], oh = (NSUInteger)S.vp[0][3];
+    if (!ow || !oh || ow > R.rt.color[0]->d.width || oh > R.rt.color[0]->d.height ||
+        (R.has_sc && (R.sc.x > 0 || R.sc.y > 0 || R.sc.x + R.sc.w < (int)ow || R.sc.y + R.sc.h < (int)oh))) return;
+    int tid = (int)(tex_slot_h(S.tex[1], S.img[1], 0) & 0xfffff);
+    os_unfair_lock_lock(&g_rmu);
+    void *raw = NULL; if (tid > 0) tex_fast_rid(tid, &raw);
+    id<MTLTexture> source = (__bridge id<MTLTexture>)raw;
+    int distinct = tid > 0 && tid < g_ntreg && g_treg[tid].ok && g_treg[tid].t.serial != R.rt.color[0]->serial;
+    os_unfair_lock_unlock(&g_rmu);
+    if (!distinct || !source || source.textureType != MTLTextureType2D || source.sampleCount != 1 || source.mipmapLevelCount != 1 ||
+        source.swizzle.red != MTLTextureSwizzleRed || source.swizzle.green != MTLTextureSwizzleGreen ||
+        source.swizzle.blue != MTLTextureSwizzleBlue || source.swizzle.alpha != MTLTextureSwizzleAlpha) return;
+    MTLViewport vp = {0, 0, ow, oh, 0, 1};
+    if (!fx_wanted(vp, source.width, source.height) || fabs((double)source.width * oh - (double)source.height * ow) > ow) return;
+    float cb[4]; ubo_read(0, 0, 0, sizeof cb, cb);
+    PD("scene FXAA texel constants %g,%g,%g,%g source %lux%lu output %lux%lu", cb[0], cb[1], cb[2], cb[3], (unsigned long)source.width, (unsigned long)source.height, (unsigned long)ow, (unsigned long)oh);
+    if (fabsf(cb[0] * ow - 1) > 1e-4f || fabsf(cb[1] * oh - 1) > 1e-4f) return;
+    rp_flush(); ubd_land_compute();
+    if (g_blit) { enc_b_end(g_blit); g_blit = nil; }
+    up_flush();
+    NSUInteger crop[] = {0, 0, source.width, source.height};
+    id<MTLTexture> output = fx_encode(&fx, g_cb, source, crop, vp, source.pixelFormat, FX_SCENE);
+    if (!output) return;
+    g_scene_up.source = source; g_scene_up.output = output;
+    g_args_dirty[1] = 1;
+    static int first; if (!first++) MLOG("scene upscaling: first native FXAA draw uses MetalFX %lux%lu → %lux%lu; HUD draws retain their inputs", (unsigned long)source.width, (unsigned long)source.height, (unsigned long)ow, (unsigned long)oh);
 }
 // The present pass: src's valid rectangle drawn into dst (the drawable, or a screenshot's texture) as present_encode draws it, through MetalFX first where fx_encode takes it
 // (fx: the scaler state to use, nil = bilinear). uvb: the pass's crop constants (one buffer per present allocator, written by the CPU)
@@ -11612,12 +11847,12 @@ static int present_encode_m4(id<MTL4CommandBuffer> cb, id<MTLTexture> src, id<MT
     double dw = dst.width, dh = dst.height;
     MTLViewport vp = present_viewport(r[2], r[3], dw, dh);
     if (dm_aspect_native()) {
-        float cr = dm_aspect_custom_ratio();
+        float region[4],cr = dm_aspect_region(1,region) ? 0 : dm_aspect_custom_ratio();
         if (cr > 0) { double w = fmin(dw, dh * cr), h = w / cr; vp = (MTLViewport){floor((dw - w) / 2), floor((dh - h) / 2), round(w), round(h), 0, 1}; }
         else vp = (MTLViewport){0, 0, dw, dh, 0, 1};   // native display: the camera holds the wide view, the canvas is stretched (UI squeezed in draw)
     }
     int full = vp.originX == 0 && vp.originY == 0 && vp.width == dw && vp.height == dh;
-    id<MTLTexture> tex = present_raw_src(src), up = fx ? fx_encode(fx, cb, tex, r, vp, dst.pixelFormat, fx == &g_fx_present) : nil;
+    id<MTLTexture> tex = present_raw_src(src), up = fx && fx_mode() == 1 ? fx_encode(fx, cb, tex, r, vp, dst.pixelFormat, fx == &g_fx_present ? FX_PRESENT : FX_CAPTURE) : nil;
     if (up) { tex = up; r[0] = r[1] = 0; r[2] = up.width; r[3] = up.height; }   // the scaled picture, the viewport's size: drawn 1:1
     MTL4RenderPassDescriptor *rp = [MTL4RenderPassDescriptor new];
     rp.colorAttachments[0].texture = dst;

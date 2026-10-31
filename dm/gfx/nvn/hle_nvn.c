@@ -919,7 +919,9 @@ static void rec_ui_scope(int32_t *instances, int32_t *base_instance) {
         *base_instance = INT32_MIN; // unused by the native rune quad; restored before replay
     } else if (dm_aspect_ui_hud_drawing() && !*base_instance) {
         *instances |= NVN_DRAW_UI_BACKGROUND;
-        *base_instance = dm_aspect_ui_hud_drawing() == 2 ? INT32_MIN+3 : INT32_MIN+1;
+        int hud=dm_aspect_ui_hud_drawing();
+        *base_instance = hud == 2 ? INT32_MIN+3 : hud == 3 ? INT32_MIN+4 : hud == 4 ? INT32_MIN+5 :
+            hud == 5 ? INT32_MIN+6 : INT32_MIN+1;
     } else if (dm_aspect_ui_background_drawing()) {
         *instances |= NVN_DRAW_UI_BACKGROUND;
         if (dm_aspect_ui_background_drawing() == 2 && !*base_instance) *base_instance = INT32_MIN+2;
@@ -1655,6 +1657,15 @@ static int fps_step_cap(void) {
     return dm_movie_playing() || t <= 30 || thermal ? 30 : 60;   // a movie: its player takes a picture per game frame, paced for the Switch's 30 (hle_movie.c)
 }
 static int fstep_on(void) { return fps_step_cap() != 0; }   // the host decides the steps in whole vsyncs
+// Retarget the native dynamic-resolution controller without changing the GPU
+// timestamps or replacing its averaging / scale logic. Only an opted-in stub
+// consumes this state word. Movies and the thermal cap use their 30 fps budget.
+static void resolution_budget(int cap) {
+    if (!dm_fps_state || !__atomic_load_n((uint32_t *)(dm_fps_state + 0x38), __ATOMIC_RELAXED)) return;
+    float percent = cap > 0 ? 100.0f * cap / 30.0f : 100.0f;
+    uint32_t bits; memcpy(&bits, &percent, sizeof bits);
+    __atomic_store_n((uint32_t *)(dm_fps_state + 0x38), bits, __ATOMIC_RELAXED);
+}
 // Engine-native frame limiters have no frame-step state page. Their requested
 // cap still governs presentation, even when the profile uses display pacing.
 static int g_present_cap = -1;
@@ -1825,6 +1836,7 @@ NVN(nvnQueuePresentTexture, void, NVNqueue *q, NVNwindow *w, int idx) {
     dm_fps_lock_tick(); dm_ue_cvar_tick();
     if (dm_fps_state) __atomic_store_n((uint32_t *)(dm_fps_state + 4), (uint32_t)dm_movie_playing(), __ATOMIC_RELAXED);   // the stubs' copy of the movie state (hle.h)
     int c = fps_step_cap();
+    resolution_budget(c);
     if (dm_fps_state) { static int was; if (c != was) { LOG("[nvn] frame step cap %d → %d fps at present %llu%s", was, c, (unsigned long long)o->presents, c == 30 && was == 60 ? (dm_movie_playing() ? " (movie playing)" : thermal_capped() ? " (thermal state serious)" : "") : ""); was = c; } }
     if (c) fstep_tick(o, c);
     static uint64_t prev_in, prev_out, prev_pass, prev_draw;

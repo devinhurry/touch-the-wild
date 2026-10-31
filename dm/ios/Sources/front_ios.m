@@ -10,17 +10,16 @@
 #include "dm.h"
 #include "haptics_apple.h"
 #include "save_sync.h"
-#include "build_info_apple.h"
+#include "botw_touch_layout.h"
 #import "CloudSaves.h"
+#import "GameFiles.h"
 
 UIView *dm_gamepad_view(CGRect frame);
 void dm_gamepad_reset(void);
+void dm_gamepad_surface_changed(void);
 void dm_gamepad_active(void);
 void front_ios_boot(void);
 int front_ios_boot_ok(void);
-int front_ios_prepare_game(void);
-void dm_show_game_import(void *view_controller, void (*done)(void));
-const char *front_ios_boot_message(void);   // main.m: why a build that keeps the game files off the IPA found none usable (NULL = the generic hint)
 bool dm_show_launcher(void *view_controller, void (*done)(void));   // Launcher.swift: false = no launcher (no dm/launcher.json, or DM_LAUNCHER=0)
 
 static CAMetalLayer *g_layer;
@@ -36,7 +35,10 @@ static UILabel *front_ios_fps_label(void);
     if ((self = [super initWithFrame:f])) {
         CAMetalLayer *l = (CAMetalLayer *)self.layer;
         l.device = MTLCreateSystemDefaultDevice(); l.pixelFormat = MTLPixelFormatBGRA8Unorm;
-        l.contentsScale = UIScreen.mainScreen.nativeScale; l.framebufferOnly = NO; l.opaque = YES;
+        l.contentsScale = self.traitCollection.displayScale; l.framebufferOnly = NO; l.opaque = YES;
+        [self registerForTraitChanges:@[UITraitDisplayScale.class] withHandler:^(id<UITraitEnvironment> view, UITraitCollection *previous) {
+            (void)previous; [(UIView *)view setNeedsLayout];
+        }];
         self.backgroundColor = UIColor.blackColor;
     }
     return self;
@@ -44,25 +46,67 @@ static UILabel *front_ios_fps_label(void);
 - (void)layoutSubviews {
     [super layoutSubviews];
     CAMetalLayer *l = (CAMetalLayer *)self.layer;
+    l.contentsScale = fmax(1,self.traitCollection.displayScale);
     l.drawableSize = CGSizeMake(self.bounds.size.width * l.contentsScale, self.bounds.size.height * l.contentsScale);
-    if (l.drawableSize.width > 0 && l.drawableSize.height > 0) dm_aspect_set_display((float)(l.drawableSize.width / l.drawableSize.height));
-    dm_aspect_set_safe_area(self.bounds.size.width, self.bounds.size.height, self.safeAreaInsets.left, self.safeAreaInsets.right);
+    CGSize display=self.superview ? self.superview.bounds.size : self.bounds.size;
+    if (display.width > 0 && display.height > 0) dm_aspect_set_display((float)(display.width/display.height));
+    dm_aspect_set_safe_area(self.bounds.size.width, self.bounds.size.height, self.safeAreaInsets.left, self.safeAreaInsets.top, self.safeAreaInsets.right);
+}
+- (void)didMoveToWindow { [super didMoveToWindow]; [self setNeedsLayout]; }
+@end
+
+// UIKit tracks reserved-region reads in updateConstraints and calls it again
+// when a fold becomes active, moves, or disappears, even at unchanged bounds.
+@interface DmPlaySurface : UIView
+@property (nonatomic) CGRect division;
+@end
+@implementation DmPlaySurface
+- (instancetype)initWithFrame:(CGRect)frame {
+    if ((self=[super initWithFrame:frame])) { _division=CGRectNull; [self setNeedsUpdateConstraints]; }
+    return self;
+}
+- (void)setFrame:(CGRect)frame {
+    BOOL changed=!CGRectEqualToRect(self.frame,frame); [super setFrame:frame];
+    if (changed) [self setNeedsUpdateConstraints];
+}
+- (void)setBounds:(CGRect)bounds {
+    BOOL changed=!CGRectEqualToRect(self.bounds,bounds); [super setBounds:bounds];
+    if (changed) [self setNeedsUpdateConstraints];
+}
+- (void)updateConstraints {
+    CGRect division=CGRectNull;
+#if defined(__IPHONE_27_1) && __IPHONE_OS_VERSION_MAX_ALLOWED >= __IPHONE_27_1
+    if (@available(iOS 27.1, *)) {
+        if (!strcmp(DM_GAME_ID,"01007EF00011E000")) {
+            for (UIViewReservedRegion *region in [self reservedRegionsOfKind:[UIViewReservedRegionKind divisionRegionKind]]) {
+                dm_touchpad_rect picture,controls; CGRect r=region.frame,b=self.bounds;
+                if (dm_touchpad_seated_split((dm_touchpad_rect){b.origin.x,b.origin.y,b.size.width,b.size.height},
+                    (dm_touchpad_rect){r.origin.x,r.origin.y,r.size.width,r.size.height},&picture,&controls)) {
+                    division=r; break;
+                }
+            }
+        }
+    }
+#endif
+    if (!CGRectEqualToRect(_division,division)) { _division=division; [self setNeedsLayout]; }
+    [super updateConstraints];
 }
 @end
 
 @interface DmRootVC : UIViewController
 @property (nonatomic, strong) DmGameView *game;
+@property (nonatomic, strong) UIView *surface;
 @property (nonatomic, strong) UIView *pad;
 @property (nonatomic, strong) UILabel *fps;
-@property (nonatomic, strong) UIButton *about;
 @property (nonatomic) BOOL launched;
 - (void)startGame;
 - (void)showLauncher;
 @end
 static DmRootVC *g_root;
 static void launcher_done(void) { [g_root startGame]; }
-static void import_done(void) { if (front_ios_prepare_game()) [g_root showLauncher]; }
+static void game_files_done(void) { [g_root showLauncher]; }
 @implementation DmRootVC
+- (void)loadView { self.view=[[DmPlaySurface alloc] initWithFrame:CGRectZero]; }
 - (void)viewDidLoad {
     [super viewDidLoad];
     self.view.backgroundColor = UIColor.blackColor;
@@ -74,34 +118,39 @@ static void import_done(void) { if (front_ios_prepare_game()) [g_root showLaunch
     if (self.game) return;
     dm_cloud_saves_env();   // DM_SAVE_SYNC from the launcher's Cloud saves pick, before the game's first save mount reads it (CloudSaves.m, save_sync.h)
     front_hud_env();   // before the game view makes its device (an env file's DM_METAL_HUD sets it in main.m already)
+    self.surface = [[UIView alloc] initWithFrame:self.view.bounds];
+    self.surface.clipsToBounds = YES;
+    [self.view addSubview:self.surface];
     self.game = [[DmGameView alloc] initWithFrame:self.view.bounds];
-    [self.view addSubview:self.game];
+    [self setNeedsUpdateOfSupportedInterfaceOrientations];
+    [self.surface addSubview:self.game];
     g_layer = (CAMetalLayer *)self.game.layer;
     if (getenv("DM_METAL_HUD") && atoi(getenv("DM_METAL_HUD"))) { g_layer.developerHUDProperties = @{@"mode": @"default"}; LOG("front end: Metal performance HUD on (DM_METAL_HUD)"); }   // Apple's HUD over the game: frame rate, frame and GPU time, memory
     dm_haptics_apple_init();
     self.pad = dm_gamepad_view(self.view.bounds);
     self.pad.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-    [self.view addSubview:self.pad];
+    [self.surface addSubview:self.pad];
     self.fps = front_ios_fps_label();   // above the pad, which hides while a controller is connected
-    if (self.fps) [self.view addSubview:self.fps];
-    self.about = [UIButton buttonWithType:UIButtonTypeSystem];
-    UIButtonConfiguration *aboutStyle = [UIButtonConfiguration plainButtonConfiguration];
-    aboutStyle.image = [UIImage systemImageNamed:@"info.circle"];
-    aboutStyle.baseForegroundColor = UIColor.whiteColor;
-    aboutStyle.background.backgroundColor = [UIColor colorWithWhite:0 alpha:0.45];
-    aboutStyle.background.cornerRadius = 8;
-    self.about.configuration = aboutStyle;
-    self.about.accessibilityLabel = @"About nxnative";
-    self.about.accessibilityIdentifier = @"nxnative.about";
-    [self.about addTarget:self action:@selector(showAbout) forControlEvents:UIControlEventTouchUpInside];
-    [self.view addSubview:self.about];   // A sibling of the pad: still reachable with a physical controller or the Tap layout
+    if (self.fps) [self.surface addSubview:self.fps];
     [self.view setNeedsLayout]; [self.view layoutIfNeeded];
     UIApplication.sharedApplication.idleTimerDisabled = YES;
     front_ios_boot();
 }
 - (void)viewDidLayoutSubviews {
     [super viewDidLayoutSubviews];
-    CGRect b = self.view.bounds; if (!self.game) return;
+    if (!self.game) return;
+    CGRect frame=self.view.bounds,division=((DmPlaySurface *)self.view).division;
+    if (CGRectIsEmpty(frame)) return;
+    float previous[4],next[4]; dm_aspect_region(1,previous);
+    dm_aspect_set_seated(CGRectIsNull(division) ? 0 : (CGRectGetMinY(division)-CGRectGetMinY(frame))/frame.size.height,
+                         CGRectIsNull(division) ? 0 : (CGRectGetMaxY(division)-CGRectGetMinY(frame))/frame.size.height);
+    dm_aspect_region(1,next);
+    if (!CGRectEqualToRect(self.surface.frame,frame) || memcmp(previous,next,sizeof next)) {
+        dm_gamepad_surface_changed(); [self.pad setNeedsLayout]; [self.game setNeedsLayout];
+    }
+    self.surface.frame=frame;
+    CGRect b=self.surface.bounds;
+    self.pad.frame=b;
     if (dm_aspect_native()) self.game.frame = b;   // native display: the host stretches the 16:9 canvas over the whole screen (the scene is camera-corrected, the UI is squeezed back)
     else {   // Fit 16:9 into the whole screen
         CGFloat w = b.size.width, h = b.size.height;
@@ -109,41 +158,30 @@ static void import_done(void) { if (front_ios_prepare_game()) [g_root showLaunch
         self.game.frame = CGRectMake(floor((b.size.width - w) / 2), floor((b.size.height - h) / 2), w, h);
     }
     // The top row's free stretch, right of the pad's L3 key and left of its central − / layout / + controls.
-    CGRect s = UIEdgeInsetsInsetRect(b, self.view.safeAreaInsets); CGFloat u = MIN(b.size.height / 430.0, 1.3);
+    CGRect s = UIEdgeInsetsInsetRect(b, self.surface.safeAreaInsets); CGFloat u = MIN(b.size.height / 430.0, 1.3);
     CGFloat x = floor(CGRectGetMinX(s) + 130 * u);
     if (self.fps) self.fps.frame = CGRectMake(x, floor(CGRectGetMinY(s) + 22 * u - 11), 64, 22);
-    self.about.frame = CGRectMake(x + (self.fps ? 72 : 0), floor(CGRectGetMinY(s) + MAX(0, 22 * u - 22)), 44, 44);
 }
 - (void)viewDidAppear:(BOOL)a {
     [super viewDidAppear:a];
     if (self.launched) return;
-    if (!front_ios_boot_ok() && front_ios_boot_message()) {
-        if (!self.presentedViewController) {
-            UIAlertController *notice = [UIAlertController alertControllerWithTitle:@"Game files" message:@(front_ios_boot_message()) preferredStyle:UIAlertControllerStyleAlert];
-            [notice addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
-            [self presentViewController:notice animated:YES completion:nil];
-        }
+    self.launched = YES; g_root = self;
+    if (!front_ios_boot_ok()) {
+        dm_show_game_files((__bridge void *)self, game_files_done);
         return;
     }
-    self.launched = YES; g_root = self;
-    if (!front_ios_boot_ok()) { dm_show_game_import((__bridge void *)self, import_done); return; }
     [self showLauncher];
 }
 - (void)showLauncher {
     if (!dm_show_launcher((__bridge void *)self, launcher_done)) [self startGame];   // the settings screen first (Launcher.swift), when the app has one
 }
-- (void)showAbout {
-    if (self.presentedViewController) return;
-    dm_gamepad_reset();   // A touch released while the sheet is up must not leave a game button held.
-    UIAlertController *about = [UIAlertController alertControllerWithTitle:@"About nxnative"
-        message:dm_build_about_message(NSBundle.mainBundle) preferredStyle:UIAlertControllerStyleAlert];
-    [about addAction:[UIAlertAction actionWithTitle:@"Close" style:UIAlertActionStyleCancel handler:nil]];
-    [self presentViewController:about animated:YES completion:nil];
-}
 - (BOOL)prefersHomeIndicatorAutoHidden { return YES; }
 - (UIRectEdge)preferredScreenEdgesDeferringSystemGestures { return UIRectEdgeAll; }   // Edge gestures need two swipes, to avoid accidental exits
 - (BOOL)prefersStatusBarHidden { return YES; }
-- (UIInterfaceOrientationMask)supportedInterfaceOrientations { return UIInterfaceOrientationMaskLandscape; }
+- (UIInterfaceOrientationMask)supportedInterfaceOrientations {
+    return self.game && !strcmp(DM_GAME_ID,"01007EF00011E000") && dm_botw_portrait_enabled() ?
+        UIInterfaceOrientationMaskLandscape | UIInterfaceOrientationMaskPortrait : UIInterfaceOrientationMaskLandscape;
+}
 @end
 UIViewController *front_ios_root(void) { return [DmRootVC new]; }
 

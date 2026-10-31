@@ -5,6 +5,9 @@ import Foundation
     static func main() {
         var failed = 0
         func expect(_ c: Bool, _ what: String) { print((c ? "PASS " : "FAIL ") + what); if !c { failed += 1 } }
+        expect(AboutSection.shortCommit("abcdef012345") == "abcdef", "About shows a six-character commit")
+        expect(AboutSection.shortCommit("abcdef012345+dirty") == "abcdef+dirty", "About preserves the local-changes marker")
+        expect(AboutSection.shortCommit("unknown") == "unknown", "About handles missing source metadata")
         let file = try! JSONDecoder().decode(SettingsFile.self, from: Data(contentsOf: URL(fileURLWithPath: CommandLine.arguments[1])))
         let suite = "nxnative.launcher-test." + UUID().uuidString
         let d = UserDefaults(suiteName: suite)!
@@ -53,6 +56,37 @@ import Foundation
         expect(reopened.values["DM_BOTW_PAD_FACE_X"] == "-0.006" && reopened.values["DM_BOTW_PAD_FACE_GAP"] == "1.060" && reopened.values["DM_BOTW_PAD_R_Y"] == "0.100", "per-control restore resets XYAB spacing and position without changing R")
         reopened.reset(keys: reopened.touchSettingsKeys)
         expect(reopened.values["DM_BOTW_PAD_R_Y"] == "-0.097" && reopened.values["DM_FPS_TARGET"] == "30", "restore all touch defaults leaves frame rate alone")
+        let portraitSuite = suite + ".portrait"
+        let portraitDefaults = UserDefaults(suiteName: portraitSuite)!
+        defer { portraitDefaults.removePersistentDomain(forName: portraitSuite) }
+        let portraitModel = LauncherModel(file.settings, defaults: portraitDefaults)
+        expect(portraitModel.values["DM_BOTW_PORTRAIT"] == "0", "portrait mode starts disabled")
+        portraitModel.values["DM_BOTW_PORTRAIT"] = "1"
+        portraitModel.values["DM_BOTW_PAD_FACE_X"] = "0.123"
+        portraitModel.values["DM_BOTW_PORTRAIT_PAD_A_X"] = "-0.200"
+        portraitModel.values["DM_BOTW_PORTRAIT_PAD_B_Y"] = "0.100"
+        portraitModel.values["DM_BOTW_PORTRAIT_PAD_X_SCALE"] = "1.250"
+        portraitModel.values["DM_BOTW_PORTRAIT_PAD_Y_X"] = "0.050"
+        portraitModel.values["DM_BOTW_PORTRAIT_MOVE_CURVE"] = "0.750"
+        portraitModel.apply()
+        let portraitRestored = LauncherModel(file.settings, defaults: portraitDefaults)
+        expect(portraitRestored.values["DM_BOTW_PAD_FACE_X"] == "0.123" && portraitRestored.values["DM_BOTW_PORTRAIT_PAD_A_X"] == "-0.200" &&
+               portraitRestored.values["DM_BOTW_PORTRAIT_PAD_B_Y"] == "0.100" && portraitRestored.values["DM_BOTW_PORTRAIT_PAD_X_SCALE"] == "1.250" &&
+               portraitRestored.values["DM_BOTW_PORTRAIT_PAD_Y_X"] == "0.050" &&
+               portraitRestored.touchStickResponse(portrait: true)?.curve == 0.75 && portraitRestored.touchStickResponse?.curve == 0.3,
+               "portrait and landscape positions and movement responses persist independently")
+        let portraitExport = portraitRestored.touchSettingsExport(portrait: true)
+        expect(portraitExport.contains("DM_BOTW_PORTRAIT_PAD_A_X=-0.200") && portraitExport.contains("DM_BOTW_PORTRAIT_PAD_B_Y=0.100") &&
+               portraitExport.contains("DM_BOTW_PORTRAIT_PAD_X_SCALE=1.250") && portraitExport.contains("DM_BOTW_PORTRAIT_PAD_Y_X=0.050") &&
+               !portraitExport.contains("DM_BOTW_PAD_FACE_X=") && !portraitExport.contains("DM_BOTW_PORTRAIT_PAD_FACE_"),
+               "portrait parameter export contains independent buttons and only the portrait profile")
+        portraitRestored.reset(keys: BotwTouchControl.compact[0].keys(portrait: true))
+        expect(portraitRestored.values["DM_BOTW_PORTRAIT_PAD_A_X"] == "0.000" && portraitRestored.values["DM_BOTW_PORTRAIT_PAD_B_Y"] == "0.100",
+               "restoring compact A preserves the other compact button adjustments")
+        portraitRestored.reset(keys: portraitRestored.touchSettingsKeys(portrait: true))
+        expect(portraitRestored.values["DM_BOTW_PORTRAIT_PAD_B_Y"] == "0.000" && portraitRestored.values["DM_BOTW_PORTRAIT_PAD_X_SCALE"] == "1.100" &&
+               portraitRestored.values["DM_BOTW_PORTRAIT_PAD_Y_X"] == "0.000" && portraitRestored.values["DM_BOTW_PAD_FACE_X"] == "0.123" && portraitRestored.values["DM_BOTW_PORTRAIT"] == "1",
+               "restoring portrait defaults preserves landscape settings and the portrait toggle")
         d.set("nan", forKey: "launcher.DM_BOTW_MOVE_CURVE"); d.set("2.00", forKey: "launcher.DM_BOTW_MOVE_SIZE")
         expect(LauncherModel(file.settings, defaults: d).touchStickResponse!.curve == 0.3 && LauncherModel(file.settings, defaults: d).touchStickResponse!.size == 0.8, "invalid saved tuning values load defaults")
         setenv("DM_ENV_FILE_KEYS", "DM_BOTW_MOVE_DEADZONE", 1); setenv("DM_BOTW_MOVE_DEADZONE", "0.12", 1)
@@ -203,6 +237,17 @@ import Foundation
         let otherGame = LauncherModel(otherSettings, defaults: memoryDefaults, availableMemory: { fatalError("unrelated game must not query the memory policy") })
         expect(!otherGame.lowMemoryEnabled && otherGame.values[LauncherModel.lowMemoryKey] == nil, "games without the memory setting do not detect or enable it")
         failed += checkLauncherLayout(LauncherModel(mac.settings, defaults: d, availableMemory: { 4 * gib }), defaults: d)
+        for list in [file.settings, mac.settings] {
+            let rows = list.filter { $0.env == "DM_PRESENT_UPSCALE" }
+            expect(rows.count == 1 && !list.contains { $0.env == "DM_SCENE_UPSCALE" }, "one upscaling choice replaces the independent switches")
+            expect(rows[0].options?.map { $0[0] } == ["off", "scene", "metalfx"], "the three upscaling modes are available")
+            let model = LauncherModel(list, defaults: d)
+            for mode in ["scene", "metalfx", "off"] {
+                model.values["DM_PRESENT_UPSCALE"] = mode; model.apply()
+                expect(String(cString: getenv("DM_PRESENT_UPSCALE")) == mode, "the selected upscaling mode reaches the game")
+                expect(LauncherModel(list, defaults: d).values["DM_PRESENT_UPSCALE"] == mode, "the upscaling choice survives reopening")
+            }
+        }
         print("launcher storage: \(failed) failed")
         exit(failed == 0 ? 0 : 1)
     }

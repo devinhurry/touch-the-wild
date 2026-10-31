@@ -1,7 +1,6 @@
 // Launcher and BOTW touch settings.
 "30 fps" = "30 fps";
 "60 fps" = "60 fps";
-"Adjusts resolution between 70% and 100% under load. Turn off to keep full resolution for the selected console mode." = "Adjusts resolution between 70% and 100% under load. Turn off to keep full resolution for the selected console mode.";
 "Advanced settings" = "Advanced settings";
 "Applies only to BOTW touch controls." = "Applies only to BOTW touch controls.";
 "Brings back all settings this game was tested with." = "Brings back all settings this game was tested with.";
@@ -131,5 +130,33 @@
 "Traditional Chinese" = "Traditional Chinese";
 "Simplified Chinese" = "Simplified Chinese";
 "Brazilian Portuguese" = "Brazilian Portuguese";
+"Adjusts 3D resolution under load to help maintain frame rate. A fixed Render scale takes precedence." = "Adjusts 3D resolution under load to help maintain frame rate. A fixed Render scale takes precedence.";
+"Scene MetalFX" = "Scene MetalFX";
+"Full-screen MetalFX" = "Full-screen MetalFX";
+"Scene MetalFX (experimental) scales 3D only; Full-screen MetalFX also scales text and UI. Uses more GPU time and can increase heat." = "Scene MetalFX (experimental) scales 3D only; Full-screen MetalFX also scales text and UI. Uses more GPU time and can increase heat.";
+
+"Layout" = "Layout";
+
+"Game files" = "Game files";
+"Import RomFS.img, or copy it to Files > On My iPhone/iPad > %@ and tap Check files." = "Import RomFS.img, or copy it to Files > On My iPhone/iPad > %@ and tap Check files.";
+"Import .img" = "Import .img";
+"Check files" = "Check files";
+"No usable game files found." = "No usable game files found.";
+"No usable game files found. Check the file location and try again." = "No usable game files found. Check the file location and try again.";
+"Importing…" = "Importing…";
+"Choose the original .img file, not an unfinished import." = "Choose the original .img file, not an unfinished import.";
+"This is not a complete RomFS image. Choose the .img created with this app." = "This is not a complete RomFS image. Choose the .img created with this app.";
+"This image does not match this app's game, update or DLC. Choose the .img produced with this build." = "This image does not match this app's game, update or DLC. Choose the .img produced with this build.";
+"This image does not contain this game's files." = "This image does not contain this game's files.";
+
+"Normal layout" = "Normal layout";
+
+"Compact layout" = "Compact layout";
+
+"Enable portrait mode" = "Enable portrait mode";
+
+"Allows portrait rotation. Tall windows use compact controls below 600pt of available width; wider windows keep the normal layout." = "Allows portrait rotation. Tall windows use compact controls below 600pt of available width; wider windows keep the normal layout.";
+
+"Send these compact layout values to use as defaults. Offsets are fractions of the full screen; positive X moves right and positive Y moves down. Normal layout settings are saved separately." = "Send these compact layout values to use as defaults. Offsets are fractions of the full screen; positive X moves right and positive Y moves down. Normal layout settings are saved separately.";
 "Experimental frame generation" = "Experimental frame generation";
 "Docked rendering only. MetalFX inserts one picture between 30 real game frames per second. Adds GPU work and display latency; requires a supported GPU. Applies on Play." = "Docked rendering only. MetalFX inserts one picture between 30 real game frames per second. Adds GPU work and display latency; requires a supported GPU. Applies on Play.";

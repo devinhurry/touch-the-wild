@@ -7,6 +7,10 @@ import UIKit
 import UniformTypeIdentifiers
 import os
 
+private final class LandscapeLauncherController<Content: View>: UIHostingController<Content> {
+    override var supportedInterfaceOrientations: UIInterfaceOrientationMask { .landscape }
+}
+
 private func info(_ key: String) -> Any? { Bundle.main.object(forInfoDictionaryKey: key) }
 
 
@@ -148,6 +152,7 @@ private struct LauncherView: View {
                                 Text(ByteCountFormatter.string(fromByteCount: Int64(memory), countStyle: .memory)).monospacedDigit().foregroundStyle(.secondary)
                             }
                         }
+                        AboutSection()
                     }
                     .listStyle(.insetGrouped)
                     .contentMargins(.horizontal, 12, for: .scrollContent)
@@ -200,7 +205,7 @@ public func dmShowLauncher(_ viewController: UnsafeMutableRawPointer, _ done: @c
         model.apply()
         h.dismiss(animated: false) { done() }
     }
-    let h = UIHostingController(rootView: view)
+    let h = LandscapeLauncherController(rootView: view)
     h.modalPresentationStyle = .fullScreen
     host = h
     parent.present(h, animated: false)

@@ -26,12 +26,36 @@ def build(gid, api, platform=None):
 
 
 class LauncherSettingsTests(unittest.TestCase):
+    def test_portrait_touch_profile_is_opt_in_and_botw_only(self):
+        for platform in ('mac', 'ios'):
+            rows = build(BOTW, 'nvn', platform)
+            self.assertEqual(rows['DM_BOTW_PORTRAIT']['default'], '0')
+            for button in 'ABXY':
+                for field, default in [('X', '0.000'), ('Y', '0.000'), ('SCALE', '1.100')]:
+                    self.assertEqual(rows[f'DM_BOTW_PORTRAIT_PAD_{button}_{field}']['default'], default)
+            self.assertEqual(rows['DM_BOTW_PORTRAIT_MOVE_CURVE']['default'], '0.300')
+            self.assertNotEqual(rows['DM_BOTW_PAD_FACE_X']['default'], rows['DM_BOTW_PORTRAIT_PAD_A_X']['default'])
+            self.assertFalse(any(k.startswith('DM_BOTW_PORTRAIT_PAD_FACE_') for k in rows))
+        for gid, api in [(WONDER, 'nvn'), ('0100535012974000', 'vulkan'), ('010014E00DB56000', 'gl')]:
+            self.assertFalse(any(k.startswith('DM_BOTW_PORTRAIT') for k in build(gid, api)))
+
     def test_upscaling_is_opt_in_for_every_graphics_api(self):
         for api, gid in [('nvn', BOTW), ('vulkan', '0100535012974000'), ('gl', '010014E00DB56000')]:
             with self.subTest(api=api):
                 s = build(gid, api)['DM_PRESENT_UPSCALE']
                 self.assertEqual((s['kind'], s['section'], s['default']), ('choice', 'Game', 'off'))
-                self.assertEqual(s['options'], [['off', 'Standard'], ['metalfx', 'MetalFX']])
+                expected = [['off', 'Standard'], ['scene', 'Scene MetalFX'], ['metalfx', 'Full-screen MetalFX']] if gid == BOTW else [['off', 'Standard'], ['metalfx', 'Full-screen MetalFX']]
+                self.assertEqual(s['options'], expected)
+
+    def test_scene_upscaling_requires_a_verified_profile(self):
+        for platform in ('ios', 'mac'):
+            for gid in (BOTW, WONDER, '0100F2C0115B6000'):
+                with tempfile.TemporaryDirectory() as tmp, patch.object(settings.nacp, 'languages', return_value=['en-US']), patch.dict(os.environ, {'SETTINGS_PLATFORM': platform}):
+                    rows = settings.build(gid, tmp, 'unused')['settings']
+                self.assertFalse(any(s['env'] == 'DM_SCENE_UPSCALE' for s in rows))
+                upscale = [s for s in rows if s['env'] == 'DM_PRESENT_UPSCALE']
+                self.assertEqual(len(upscale), 1)
+                self.assertEqual(('scene' in [o[0] for o in upscale[0]['options']]), gid == BOTW)
 
     def test_frame_buffering_by_graphics_api(self):
         for api, gid in [('nvn', BOTW), ('vulkan', '0100535012974000'), ('gl', '010014E00DB56000'), ('', BOTW)]:

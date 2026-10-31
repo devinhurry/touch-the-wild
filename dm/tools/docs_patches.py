@@ -111,6 +111,8 @@ SWITCH_BINDING = [
      'why': "a per-game presentation choice requiring the profile's camera and UI draw identities"}),
     ('aspect_canvas', '', {'what': 'the final UI canvas composite shader', 'now': 'game', 'goal': 'game', 'purpose': 'rendering',
      'why': "identifies the game's own canvas pass, so offscreen passes keep their coordinates"}),
+    ('scene_upscale', '', {'what': 'the scene composite before the HUD', 'now': 'game', 'goal': 'game', 'purpose': 'rendering',
+     'why': "a verified pair of the game's shaders, whose scene input can be scaled without scaling its HUD"}),
     ('aspect_ui', '', {'what': 'font and layout vertex shaders kept proportional', 'now': 'game', 'goal': 'game', 'purpose': 'rendering',
      'why': "the game's UI draw identities, transformed together with their scissors"}),
     ('camera_aspect', '', {'what': 'the native camera projection layout', 'now': 'game', 'goal': 'game', 'purpose': 'rendering',
@@ -202,7 +204,7 @@ def host_rows(builds):   # {build ID: [(file, line, what)]}: rows and checks of 
     out = {}
     tracked = subprocess.run(['git', 'ls-files', *HOST], cwd=REPO, capture_output=True, text=True, check=True).stdout.split('\n')
     for p in sorted(REPO / f for f in set(tracked) if f):   # a set: ls-files lists a file in a merge conflict once per stage
-        if p.suffix not in HOST_EXT or 'tests' in p.relative_to(REPO).parts[2:]: continue
+        if p.suffix not in HOST_EXT or 'tests' in p.relative_to(REPO).parts[2:] or not p.is_file(): continue
         table = None
         for n, line in enumerate(p.read_text(errors='replace').split('\n'), 1):
             m = re.search(r'\b(k_\w+)\s*\[\]\s*=', line)

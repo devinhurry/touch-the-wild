@@ -25,6 +25,67 @@ separate from the acceptance results below.
 
 ## Coverage
 
+### iPhone Duo and Seated layout (2026-10-31)
+
+- [x] Detect an active horizontal fold through UIKit reserved regions, including
+  changes at unchanged window bounds; leave vertical/book folds alone.
+- [x] Keep the picture and native menus above the fold, with touch controls below.
+  In Seated mode the lower pad stays available in menus; upper direct touch still works.
+- [x] Put the visible minimap/environment cluster at the top of the lower pane.
+  Map hits and plus/minus share the same geometry; hearts stay above the fold.
+- [x] Preserve native game canvases and cached 3D/menu pictures; composite dock
+  draws separately at final output. Keep fixed picture aspects inside the upper pane.
+- [x] Refresh display scale and release virtual input on geometry changes while
+  preserving physical controllers and cancelled menu-finger ownership.
+- [x] Select compact/normal controls by the usable pane's width, retaining the
+  600pt boundary and separate settings. Stack the touch editor in narrow windows.
+- [x] Native fixtures, 191 NVN checks, 201 graphics checks, 188 iOS source checks,
+  SwiftUI/settings storage and the UIKit harness (40 look sessions) pass.
+- [x] Mac: lower A/B in menus, upper direct categories/Back, top-dock minimap hits,
+  complete inventory rendering and Seated/whole-window/Seated restoration.
+- [ ] Build with the actual iOS 27.1 SDK; test physical Duo folding/display changes,
+  safe areas and gyro. Local SDK 26.5 and a declaration-only syntax check do not
+  complete this acceptance. Shader regression remains blocked by the compiler pin.
+
+Implementation, Apple API references and the exact validation boundary are in the
+[game note](../dm/games/01007EF00011E000/README.md#rendering). Evidence is in
+`duo-adaptation-20261031/` in the game's external work folder. Implementation was
+developed on `codex/botw-duo-adaptation` before integration into main.
+
+### Narrow displays and optional portrait controls (2026-10-31)
+
+- [x] Preserve centered 16:9 menu content while anchoring hearts and the collapsed
+  minimap/environment group to the top on narrower displays, including 4:3.
+  HUD size follows the shorter screen edge so portrait remains readable.
+- [x] Extend loading cream/black fills vertically without changing foreground UI.
+- [x] Add a default-off BOTW portrait toggle, with native iOS orientation support.
+- [x] Use compact controls only in portrait with less than 600pt of width after
+  left/right safe insets; wide portrait and landscape use the normal layout.
+  Native geometry and UIKit checks cover the boundary, 626/744pt windows,
+  safe insets, face hits and the selected profile's native D-pad size.
+- [x] Store compact layout and movement settings separately from normal.
+  Left controls form D-pad/L/ZL above the movement stick; right controls form
+  three upward-right pairs: B/A, Y/X and ZR/R, from bottom to top.
+- [x] Give the touch editor separate normal/compact previews, reset and export.
+- [x] Verify native geometry, setting isolation, 39 UIKit look sessions,
+  controller hiding and rotation release; build the unsigned production iOS app.
+- [x] Mac runtime: portrait and 4:3 top HUD, relocated minimap tap and native
+  Back, cream/black loading fill, and portrait/landscape/portrait restoration.
+- [x] Correct the native rune capture draw's double viewport correction; its
+  icon keeps its proportions and stays above the D-pad at narrow aspects.
+  The regression reproduced four failures before the fix; all 184 GPU checks pass.
+- [x] Preserve the weather animation's native geometry and apply narrow-screen
+  sizing in its draw projection. Current rain and forecast icons retain matching
+  proportions and alignment in Mac portrait and 4:3. Native aspect/HUD fixtures,
+  189 NVN recording checks, 192 graphics checks and 188 iOS source checks pass.
+- [ ] Physical iPhone: orientation changes, notch/home-indicator spacing and
+  portrait gyro feel. Native/simulator checks do not complete device acceptance.
+
+The [game note](../dm/games/01007EF00011E000/README.md#rendering) records the
+implementation and validation boundary. The current Mac host runs with prepared
+chain `715bb867230c` shaders. Full shader regression is blocked by the local
+Metal compiler version, independently of the passing native/GPU/UI checks.
+
 ### Camera drag below face buttons (2026-10-31)
 
 The [game note](../dm/games/01007EF00011E000/README.md#direct-categories-and-gameplay-hud-prompts)

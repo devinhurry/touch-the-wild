@@ -24,6 +24,8 @@ pad_layout	full
 aspect_native	on
 aspect_ui	21fe759b8114941c 60e2041ed375cae1 9f8de48697e031b5 71018be49e22ab4a 5275c47bd2f93f12 86208e96540877ab 51deaed0b27374b9 4fb3d55c47745276 78a4ace2913b091d a983fef957911db8
 aspect_canvas	ecb4242efaf4042b
+# Native scene FXAA / upscale into the UI canvas, before any HUD draws.
+scene_upscale	5e9f57168d89a543 bd7ffdd435c6c3bc
 # Experimental MetalFX frame generation: the scene is complete after this upscale
 # fragment draw; the G-buffer vertex camera block is slot 0, 2336 bytes (BOTW 1.9.0).
 # Shader identity and camera layout follow MacNativeGames; normal rendering is unchanged.
