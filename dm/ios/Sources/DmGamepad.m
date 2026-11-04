@@ -1326,6 +1326,10 @@ shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherG
     [self traceLook:"begin" at:p delta:CGPointZero];
     dm_look_input(DM_LOOK_BEGIN, 0, 0);
 }
+- (BOOL)isTriggerLook:(UITouch *)t {
+    uint64_t owner = [_owner objectForKey:t].unsignedLongLongValue;
+    return (owner & 0xff) == C_BTN && ((owner >> 8) == B_R || (owner >> 8) == B_ZR);
+}
 - (void)moveLook:(UITouch *)t to:(CGPoint)p {
     [self checkLookGeometry];
     if (t != _lookTouch) return;
@@ -1333,8 +1337,17 @@ shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherG
     float dx = (float)((p.x - _lookLast.x) / _lookScale);
     float dy = (float)((p.y - _lookLast.y) / _lookScale);
     [self traceLook:"move" at:p delta:CGPointMake(dx,dy)];
+    BOOL startingTrigger = [self isTriggerLook:t] && !_lookDragged;
+    CGFloat slop = DM_TP_LOOK_TAP_SLOP * self.u;
     _lookDragged |= dm_touchpad_look_dragged((float)_lookDown.x, (float)_lookDown.y,
-                                              (float)p.x, (float)p.y, DM_TP_LOOK_TAP_SLOP * self.u);
+                                              (float)p.x, (float)p.y, slop);
+    if (startingTrigger) {
+        // A button hold can shift its touch point before the user intends to drag.
+        // Start at the tap-slop boundary; never replay that initial drift as a turn.
+        CGFloat excess = _lookDragged ? 1 - slop / dist(p, _lookDown) : 0;
+        dx = (float)((p.x - _lookDown.x) * excess / _lookScale);
+        dy = (float)((p.y - _lookDown.y) * excess / _lookScale);
+    }
     if (_lookDragged) _botwLookTapPending = NO;
     _lookLast = p;
     _stickNow[1] = p;
@@ -1347,7 +1360,8 @@ shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherG
     if (t != _lookTouch) return;
     if (cancelled || !dm_look_enabled()) { [self cancelLook]; return; }
     [self traceLook:"end" at:p delta:CGPointZero];
-    [self moveLook:t to:p];   // UIKit may deliver a final location only in touchesEnded.
+    // A shoulder release fires/throws; its lifting contact must not add a last turn.
+    if (![self isTriggerLook:t]) [self moveLook:t to:p];
     if (t == _lookTouch) {
         BOOL tap = dm_touchpad_look_tap((float)(t.timestamp - _lookDownTime), _lookDragged);
         dm_look_input(DM_LOOK_END, 0, 0); _lookTouch = nil; _lookScale = 0;
@@ -1678,7 +1692,6 @@ shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherG
         if ((v & 0xff) == C_LOOK) [self endLook:t at:[t locationInView:self] cancelled:!ended];
         if ((v & 0xff) == C_BTN && [self botwTouchControlsActive] && ((v >> 8) == B_R || (v >> 8) == B_ZR)) {
             if (_touchLayout.trigger_drag[(v>>8)==B_ZR]) {
-                [self moveLook:t to:[t locationInView:self]];
                 _lookDragged=YES; _botwLookTapPending=NO;
                 [self endLook:t at:[t locationInView:self] cancelled:!ended];
             }

@@ -1624,6 +1624,51 @@ static void test_look_drag(DmGamepad *view) {
     g_botw_touchhud_available=NO; [view reset];
 }
 
+static void test_botw_trigger_look(DmGamepad *view) {
+    g_botw_touchhud_available = g_botw_gameplay_ready = YES;
+    g_look_enabled = YES;
+    setenv("DM_BOTW_PAD_R_DRAG_MODE","1",1);
+    setenv("DM_BOTW_PAD_ZR_DRAG_MODE","1",1);
+    [view refreshTouchSettings];
+    [view dm_testSetTouchHudModeFull:YES tap:NO connected:NO]; [view layoutIfNeeded];
+    const int buttons[] = {7,9};
+    for (unsigned i=0;i<sizeof buttons/sizeof *buttons;i++) {
+        int b=buttons[i]; CGPoint c=[view dm_testDropCenter:b];
+        reset_look(); FakeTouch *t=touch(c.x,c.y); began(view,t);
+        CHECK(g_buttons==(1ull<<b) && g_look_held,"a drag-camera shoulder presses immediately before any intentional drag");
+        // Offsets from the iPhone trace: contact settles downward, then shifts on lift.
+        moved(view,t,c.x+.667,c.y+5);
+        moved(view,t,c.x+3,c.y+8.333);
+        moved(view,t,c.x+5.334,c.y-5.667);
+        ended(view,t,c.x+7,c.y-7.334);
+        CHECK(g_look_count==2 && g_look_events[1].phase==DM_LOOK_END && !g_queued_dx && !g_queued_dy,
+              "iPhone shoulder hold and release drift never becomes camera displacement");
+        CHECK(!g_buttons && !g_rx && !g_ry,"a stationary shoulder release clears its button and virtual axes");
+
+        reset_look(); t=touch(c.x,c.y); began(view,t);
+        moved(view,t,c.x+6,c.y);
+        CHECK(g_look_count==1,"a shoulder stays in button-hold mode within the existing tap slop");
+        moved(view,t,c.x+20,c.y);
+        near_value(g_queued_dx,(20-DM_TP_LOOK_TAP_SLOP)/390.0f,
+                   "a shoulder drag starts continuously with only travel beyond the tap slop");
+        moved(view,t,c.x+23,c.y+2);
+        near_value(g_queued_dy,2.0f/390.0f,"an active shoulder drag keeps fine vertical adjustment without an axis lock");
+        int before=g_look_count;
+        ended(view,t,c.x+26,c.y-2);
+        CHECK(g_look_count==before+1 && g_look_events[before].phase==DM_LOOK_END,
+              "releasing a dragged shoulder ends look without injecting the lift location");
+        near_value(g_queued_dx,11.0f/390.0f,"shoulder END retains real movement queued before release");
+        near_value(g_queued_dy,2.0f/390.0f,"shoulder END excludes the vertical lift shift");
+
+        reset_look(); t=touch(c.x,c.y); began(view,t); moved(view,t,c.x+20,c.y);
+        cancelled(view,t,c.x+21,c.y-2);
+        CHECK(g_look_events[g_look_count-1].phase==DM_LOOK_CANCEL && !g_queued_dx && !g_queued_dy,
+              "cancelling a shoulder drag still discards queued camera movement");
+    }
+    unsetenv("DM_BOTW_PAD_R_DRAG_MODE"); unsetenv("DM_BOTW_PAD_ZR_DRAG_MODE");
+    [view refreshTouchSettings]; g_botw_touchhud_available=NO; [view reset];
+}
+
 static void test_botw_face_gaps(DmGamepad *view) {
     g_botw_touchhud_available = g_botw_gameplay_ready = YES;
     g_botw_touch_menu_active = g_botw_touch_menu_presented = NO;
@@ -2272,6 +2317,7 @@ static void run_tests(DmGamepad *view) {
     test_botw_scope_pointer(view);
     test_motion_orientation();
     test_look_drag(view);
+    test_botw_trigger_look(view);
     test_botw_face_gaps(view);
     test_botw_left_stick_gaps(view);
     test_priority_and_multitouch(view);
