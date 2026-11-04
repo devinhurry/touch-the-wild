@@ -921,16 +921,19 @@ match their frozen source. This capture establishes that small reported
 touch displacements enter camera motion directly, including on button release;
 it does not distinguish finger roll from UIKit touch processing.
 
-R/ZR camera dragging now recognizes a drag using the existing 12 pt tap slop.
-The button still presses immediately. Initial movement inside that radius
+Free-space and R/ZR camera dragging now recognize a drag using the existing
+12 pt tap slop. A shoulder button still presses immediately. Initial movement inside that radius
 does not turn the camera; the crossing sample contributes only travel beyond
-the radius, then subsequent movement retains its full displacement. Shoulder
+the radius, then subsequent movement retains its full displacement. Camera
 END retains queued movement from MOVE events but does not turn its lifting
-contact location into an extra MOVE. Ordinary free-space look still accepts
-its final location, and the native gyro composition is unchanged.
+contact location into an extra MOVE. Its final location still rejects a tap
+when it exceeds the slop, so a release-only displacement cannot become a
+scope double tap. Quick-strip scrolling retains its full initial movement
+and final location. Native gyro composition is unchanged.
 
 The UIKit input harness replays the recorded drift and intentional drags for
-both shoulders. The 12 new failing assertions on the old implementation pass
+both shoulders and free-space look, plus scope taps and quick-strip scrolling.
+The 12 new failing assertions on the original shoulder implementation pass
 with the fix; its ten pre-existing artwork/scope-tap failures remain unchanged.
 The iPhoneOS source syntax check passes. Real iPhone feel and simultaneous
 motion input still require device acceptance.
