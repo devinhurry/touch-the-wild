@@ -890,6 +890,28 @@ with both `look: compose` callbacks in frame 13903. This verifies the live
 route and touch addition, not simultaneous physical sensor input. Physical
 iOS aiming feel remains unverified.
 
+**Open: iPhone shoulder-drag pitch jump (2026-11-05).** The reported
+downward step happens near the first movement of R or ZR in drag-camera mode,
+including horizontal drags with the motion source off. Releasing the bow can
+produce an upward step. Switching ZR to drag-cancel avoids it; the same report
+was not reproduced on Mac. This does not establish a gyro-reference fault.
+A current-checkout Mac test also retained continuous aiming pitch for injected
+relative displacement; it does not reproduce UIKit touch delivery or establish
+the cause on an iPhone. Its isolated save had no arrows, so firing was not
+validated.
+
+`DM_LOOK_TRACE=1` now records UIKit BEGIN/MOVE/END/CANCEL coordinates, the
+previous point, normalized displacement, canvas scale and previously published
+virtual axes. The shared-getter trace includes both native and substituted
+vectors and the matched aiming camera; the pitch gate records its incoming
+target, smoothing base, bounds and accepted touch contribution even when that
+contribution is zero. Capture a short R/ZR reproduction in `Documents/log.txt`
+with this switch in `Documents/env.txt`. These diagnostics distinguish an
+unexpected UIKit vertical delta, a native-vector passthrough after a source
+mismatch, and a native pitch change with no touch contribution. No input
+filter or behavioral fix has been applied for this report; an iPhone trace is
+still required.
+
 #### AppCamera touch gestures
 
 In BOTW touch mode, drag with one finger to frame the shot and pinch to zoom.
